@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Tidy Tabs</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="app-shell">
+    <!-- Top Header -->
+    <header class="app-header">
+      <div class="brand">
+        <div class="brand-badge">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="3" y="3" width="18" height="18" rx="4" ry="4"></rect>
+            <path d="M3 9h18"></path>
+            <path d="M9 21V9"></path>
+          </svg>
+        </div>
+        <div class="brand-text">
+          <div class="brand-title">
+            <span>Tidy Tabs</span>
+            <span class="version-tag">2.0</span>
+          </div>
+          <span class="brand-sub">Native Tab Organizer</span>
+        </div>
+      </div>
+      <div class="status-indicator" title="Monitoring active window">
+        <span class="status-dot"></span>
+        <span class="status-label">Active</span>
+      </div>
+    </header>
+
+    <!-- Visual Tab Distribution: Proportional Segmented Bar -->
+    <div class="ratio-card">
+      <div class="ratio-header">
+        <span class="ratio-title">Window Breakdown</span>
+        <span class="ratio-meta" id="stat-total-summary">0 Tabs</span>
+      </div>
+      <div class="segmented-bar" id="segmented-bar">
+        <!-- Dynamically injected segments -->
+      </div>
+      <div class="legend-row" id="ratio-legend">
+        <!-- Dynamically injected legend chips -->
+      </div>
+    </div>
+
+    <!-- Quick Action Dock -->
+    <div class="action-dock">
+      <button id="btn-organize" class="dock-btn dock-btn-primary" title="Sort tabs by Chrome History usage score & regroup">
+        <svg class="dock-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"></path>
+          <path d="M3 3v5h5"></path>
+          <path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"></path>
+          <path d="M16 21h5v-5"></path>
+        </svg>
+        <span id="label-organize">Organize Now</span>
+      </button>
+
+      <button id="btn-dedupe" class="dock-btn dock-btn-secondary" title="Close duplicate tabs with identical URLs" disabled>
+        <svg class="dock-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+          <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+        </svg>
+        <span>Duplicates</span>
+        <span class="count-pill" id="badge-duplicates">0</span>
+      </button>
+
+      <button id="btn-prune-archive" class="dock-btn dock-btn-secondary" title="Close all tabs currently in the Archive group" disabled>
+        <svg class="dock-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="3 6 5 6 21 6"></polyline>
+          <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+        </svg>
+        <span>Archive</span>
+        <span class="count-pill" id="badge-archive">0</span>
+      </button>
+    </div>
+
+    <!-- Active Window Groups Breakdown -->
+    <div class="surface-card">
+      <div class="card-header">
+        <span class="card-title">Native Tab Groups</span>
+        <span class="card-caption" id="stat-pinned-info">0 Pinned</span>
+      </div>
+      <div class="group-list" id="group-breakdown">
+        <!-- Dynamically populated group items -->
+      </div>
+    </div>
+
+    <!-- 1-Click Uncategorized Open Domains Classifier (Context-aware) -->
+    <div class="surface-card" id="uncategorized-section" style="display: none;">
+      <div class="card-header">
+        <span class="card-title">Classify Open Domains</span>
+        <span class="card-tag">Unassigned</span>
+      </div>
+      <div class="uncat-container" id="uncategorized-list">
+        <!-- Dynamically injected domain classification cards -->
+      </div>
+    </div>
+
+    <!-- Automation & Intelligence Settings -->
+    <div class="surface-card">
+      <div class="card-header">
+        <span class="card-title">Smart Behaviors</span>
+      </div>
+
+      <!-- Focus Mode Switch -->
+      <label class="switch-row" for="toggle-focus-mode">
+        <div class="switch-meta">
+          <span class="switch-title">Focus Mode</span>
+          <span class="switch-desc">Auto-collapse inactive groups while working</span>
+        </div>
+        <div class="switch-container">
+          <input type="checkbox" id="toggle-focus-mode" class="switch-input">
+          <span class="switch-track"></span>
+        </div>
+      </label>
+
+      <!-- History Clutter & RAM Hibernation Switch -->
+      <label class="switch-row" for="toggle-smart-history">
+        <div class="switch-meta">
+          <div class="switch-title-row">
+            <span class="switch-title">Smart History &amp; RAM Saver</span>
+            <span class="badge-mini-green" id="stat-hibernated-badge">0 sleeping</span>
+          </div>
+          <span class="switch-desc">Archive 1-visit tabs after 3d and hibernate memory</span>
+        </div>
+        <div class="switch-container">
+          <input type="checkbox" id="toggle-smart-history" class="switch-input" checked>
+          <span class="switch-track"></span>
+        </div>
+      </label>
+
+      <!-- Archive TTL Slider -->
+      <div class="slider-block">
+        <div class="slider-meta">
+          <span class="slider-title">Archive Inactivity Threshold</span>
+          <span class="slider-val-badge" id="ttl-display">14 Days</span>
+        </div>
+        <div class="slider-track-wrap">
+          <input type="range" id="ttl-slider" min="3" max="90" step="1" value="14" class="custom-slider">
+        </div>
+      </div>
+    </div>
+
+    <!-- Custom Domain Rules Editor -->
+    <div class="surface-card">
+      <div class="card-header">
+        <span class="card-title">Custom Domain Rules</span>
+      </div>
+
+      <!-- Category Segmented Selector -->
+      <div class="segmented-control" id="category-selector">
+        <button class="segment-tab active" data-cat="work">Work</button>
+        <button class="segment-tab" data-cat="entertainment">Entertainment</button>
+        <button class="segment-tab" data-cat="research">Research</button>
+        <button class="segment-tab" data-cat="utilities">Utilities</button>
+      </div>
+
+      <!-- Domain Chips Container -->
+      <div class="domain-drawer">
+        <div class="chips-wrap" id="domain-tags">
+          <!-- Dynamically populated chip badges -->
+        </div>
+
+        <form id="add-domain-form" class="domain-form">
+          <input type="text" id="input-domain" class="clean-input" placeholder="e.g. figma.com or docs.google.com" required autocomplete="off" spellcheck="false">
+          <button type="submit" class="btn-chip-add">Add</button>
+        </form>
+      </div>
+    </div>
+
+    <!-- Footer -->
+    <footer class="app-footer">
+      <button id="btn-reset" class="btn-subtle-reset">Reset to Defaults</button>
+      <span class="footer-meta">Chrome Native TabGroups</span>
+    </footer>
+
+    <!-- Toast Notification -->
+    <div id="toast-message" class="toast-popup"></div>
+  </div>
+
+  <script src="popup.js" type="module"></script>
+</body>
+</html>

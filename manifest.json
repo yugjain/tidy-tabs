@@ -1,0 +1,31 @@
+{
+  "manifest_version": 3,
+  "name": "Tidy Tabs - Smart Tab Organizer",
+  "version": "2.0.0",
+  "description": "Automatically organizes unpinned tabs into native Tab Groups using Chrome History intelligence, domain heuristics, and TTL recency.",
+  "permissions": [
+    "tabs",
+    "tabGroups",
+    "storage",
+    "alarms",
+    "history"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Tidy Tabs Dashboard",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}
