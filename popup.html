@@ -21,14 +21,14 @@
         <div class="brand-text">
           <div class="brand-title">
             <span>Tidy Tabs</span>
-            <span class="version-tag">2.0</span>
+            <span class="version-tag">2.1</span>
           </div>
           <span class="brand-sub">Native Tab Organizer</span>
         </div>
       </div>
-      <div class="status-indicator" title="Monitoring active window">
+      <div class="status-indicator" title="Automatic full Usage-Score sorting every 5 minutes">
         <span class="status-dot"></span>
-        <span class="status-label">Active</span>
+        <span class="status-label">Auto: 5m</span>
       </div>
     </header>
 
@@ -77,10 +77,30 @@
       </button>
     </div>
 
+    <!-- Tab Spotlight & Navigator (First-principles tab awareness) -->
+    <div class="surface-card">
+      <div class="card-header">
+        <div class="card-header-left">
+          <span class="card-title">Tab Spotlight</span>
+          <span class="spotlight-hint">1-click jump</span>
+        </div>
+        <div class="search-box-wrap">
+          <svg class="search-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="11" cy="11" r="8"></circle>
+            <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+          </svg>
+          <input type="text" id="spotlight-search" class="spotlight-input" placeholder="Search tabs..." autocomplete="off" spellcheck="false">
+        </div>
+      </div>
+      <div class="spotlight-scroll-wrap" id="spotlight-list">
+        <!-- Dynamically injected tab spotlight rows -->
+      </div>
+    </div>
+
     <!-- Active Window Groups Breakdown -->
     <div class="surface-card">
       <div class="card-header">
-        <span class="card-title">Native Tab Groups</span>
+        <span class="card-title">Active Native Groups</span>
         <span class="card-caption" id="stat-pinned-info">0 Pinned</span>
       </div>
       <div class="group-list" id="group-breakdown">
@@ -92,7 +112,7 @@
     <div class="surface-card" id="uncategorized-section" style="display: none;">
       <div class="card-header">
         <span class="card-title">Classify Open Domains</span>
-        <span class="card-tag">Unassigned</span>
+        <span class="card-tag">1-Tab Sites</span>
       </div>
       <div class="uncat-container" id="uncategorized-list">
         <!-- Dynamically injected domain classification cards -->
@@ -174,7 +194,7 @@
     <!-- Footer -->
     <footer class="app-footer">
       <button id="btn-reset" class="btn-subtle-reset">Reset to Defaults</button>
-      <span class="footer-meta">Chrome Native TabGroups</span>
+      <span class="footer-meta">Auto-Sweep: 5 Minutes</span>
     </footer>
 
     <!-- Toast Notification -->

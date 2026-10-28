@@ -1,9 +1,11 @@
 /**
- * Tidy Tabs 2.0 - Refined Popup Dashboard Controller
+ * Tidy Tabs 2.1 - Refined Popup Dashboard & Tab Spotlight Controller
  */
 
 let currentSettings = null;
 let activeCategoryKey = 'work';
+let allSpotlightTabs = [];
+let allDynamicCategories = [];
 
 // DOM Selectors
 const statTotalSummary = document.getElementById('stat-total-summary');
@@ -18,6 +20,9 @@ const btnDedupe = document.getElementById('btn-dedupe');
 const badgeDuplicates = document.getElementById('badge-duplicates');
 const btnPruneArchive = document.getElementById('btn-prune-archive');
 const badgeArchive = document.getElementById('badge-archive');
+
+const spotlightSearch = document.getElementById('spotlight-search');
+const spotlightList = document.getElementById('spotlight-list');
 
 const groupBreakdown = document.getElementById('group-breakdown');
 const uncategorizedSection = document.getElementById('uncategorized-section');
@@ -48,7 +53,7 @@ function showToast(text) {
 }
 
 /**
- * Fetch and render current extension state and live window metrics.
+ * Fetch and render current extension state, tab spotlight, and metrics.
  */
 async function loadState() {
   try {
@@ -56,6 +61,8 @@ async function loadState() {
     if (!res) return;
 
     currentSettings = res.settings;
+    allSpotlightTabs = res.spotlightTabs || [];
+    allDynamicCategories = res.dynamicCategories || [];
 
     // Header summaries
     const totalTabs = res.totalTabs || 0;
@@ -76,11 +83,22 @@ async function loadState() {
     btnDedupe.disabled = dupCount === 0;
     btnPruneArchive.disabled = archCount === 0;
 
+    // Combined category list: Core categories + Dynamic Domain Clusters + Archive
+    const activeCategories = [
+      ...res.settings.categories.filter((c) => c.id !== 'utilities'),
+      ...allDynamicCategories,
+      res.settings.categories.find((c) => c.id === 'utilities') || { id: 'utilities', name: 'Utilities', color: 'yellow' },
+      { id: 'archive', name: 'Archive', color: 'grey' }
+    ];
+
     // Render Proportional Segmented Tab Strip & Legend
-    renderProportionalBar(res.counts, res.settings.categories, unpinnedCount);
+    renderProportionalBar(res.counts, activeCategories, unpinnedCount);
 
     // Render Group Rows
-    renderGroupRows(res.counts, res.settings.categories);
+    renderGroupRows(res.counts, activeCategories);
+
+    // Render Tab Spotlight
+    renderSpotlightList(spotlightSearch.value);
 
     // Render 1-Click Uncategorized Open Domains
     renderUncategorizedDomains(res.uncategorizedDomains || []);
@@ -108,11 +126,6 @@ function renderProportionalBar(counts = {}, categories = [], totalUnpinned = 0) 
   segmentedBar.innerHTML = '';
   ratioLegend.innerHTML = '';
 
-  const allCategories = [
-    ...categories,
-    { id: 'archive', name: 'Archive' }
-  ];
-
   if (totalUnpinned === 0) {
     const emptySeg = document.createElement('div');
     emptySeg.className = 'bar-segment';
@@ -122,7 +135,7 @@ function renderProportionalBar(counts = {}, categories = [], totalUnpinned = 0) 
     return;
   }
 
-  for (const cat of allCategories) {
+  for (const cat of categories) {
     const count = counts[cat.id] || 0;
     if (count === 0) continue;
 
@@ -130,7 +143,7 @@ function renderProportionalBar(counts = {}, categories = [], totalUnpinned = 0) 
 
     // Bar segment
     const seg = document.createElement('div');
-    seg.className = `bar-segment seg-${cat.id}`;
+    seg.className = `bar-segment seg-${cat.color || cat.id}`;
     seg.style.width = `${pct}%`;
     seg.title = `${cat.name}: ${count} tabs (${pct}%)`;
     segmentedBar.appendChild(seg);
@@ -140,7 +153,7 @@ function renderProportionalBar(counts = {}, categories = [], totalUnpinned = 0) 
     chip.className = 'legend-chip';
 
     const dot = document.createElement('span');
-    dot.className = `chip-dot dot-${cat.id}`;
+    dot.className = `chip-dot dot-${cat.color || cat.id}`;
 
     const text = document.createElement('span');
     text.textContent = `${cat.name} (${count})`;
@@ -157,12 +170,7 @@ function renderProportionalBar(counts = {}, categories = [], totalUnpinned = 0) 
 function renderGroupRows(counts = {}, categories = []) {
   groupBreakdown.innerHTML = '';
 
-  const allCategories = [
-    ...categories,
-    { id: 'archive', name: 'Archive' }
-  ];
-
-  for (const cat of allCategories) {
+  for (const cat of categories) {
     const count = counts[cat.id] || 0;
     const row = document.createElement('div');
     row.className = 'group-row';
@@ -171,7 +179,7 @@ function renderGroupRows(counts = {}, categories = []) {
     left.className = 'group-left';
 
     const bar = document.createElement('span');
-    bar.className = `group-bar-indicator bar-${cat.id}`;
+    bar.className = `group-bar-indicator bar-${cat.color || cat.id}`;
 
     const name = document.createElement('span');
     name.className = 'group-name';
@@ -188,6 +196,102 @@ function renderGroupRows(counts = {}, categories = []) {
     row.appendChild(badge);
     groupBreakdown.appendChild(row);
   }
+}
+
+/**
+ * Render the interactive Tab Spotlight list with search filtering.
+ */
+function renderSpotlightList(query = '') {
+  spotlightList.innerHTML = '';
+  const cleanQ = (query || '').trim().toLowerCase();
+
+  const filtered = cleanQ
+    ? allSpotlightTabs.filter(
+        (t) =>
+          t.title.toLowerCase().includes(cleanQ) ||
+          t.url.toLowerCase().includes(cleanQ) ||
+          t.categoryName.toLowerCase().includes(cleanQ)
+      )
+    : allSpotlightTabs;
+
+  if (filtered.length === 0) {
+    const emptyMsg = document.createElement('div');
+    emptyMsg.style.padding = '10px';
+    emptyMsg.style.textAlign = 'center';
+    emptyMsg.style.fontSize = '11px';
+    emptyMsg.style.color = 'var(--text-muted)';
+    emptyMsg.textContent = cleanQ ? 'No matching tabs found.' : 'No open tabs.';
+    spotlightList.appendChild(emptyMsg);
+    return;
+  }
+
+  for (const tab of filtered) {
+    const item = document.createElement('div');
+    item.className = 'spotlight-item';
+    item.title = `Jump to: ${tab.title}\n(${tab.url})`;
+
+    // Left side: Favicon & Title
+    const left = document.createElement('div');
+    left.className = 'spotlight-left';
+
+    if (tab.favIconUrl && tab.favIconUrl.startsWith('http')) {
+      const img = document.createElement('img');
+      img.className = 'spotlight-fav';
+      img.src = tab.favIconUrl;
+      img.onerror = () => {
+        img.replaceWith(createFallbackIcon(tab.title));
+      };
+      left.appendChild(img);
+    } else {
+      left.appendChild(createFallbackIcon(tab.title));
+    }
+
+    const textBox = document.createElement('div');
+    textBox.className = 'spotlight-text-box';
+
+    const titleSpan = document.createElement('span');
+    titleSpan.className = 'spotlight-tab-title';
+    titleSpan.textContent = tab.title;
+
+    textBox.appendChild(titleSpan);
+    left.appendChild(textBox);
+
+    // Right side: Category badge & Recency status
+    const badgesBox = document.createElement('div');
+    badgesBox.className = 'spotlight-badges-box';
+
+    const catBadge = document.createElement('span');
+    catBadge.className = 'badge-cat-tag';
+    catBadge.textContent = tab.categoryName;
+
+    const recBadge = document.createElement('span');
+    recBadge.className = `badge-recency badge-recency-${tab.recencyStatus}`;
+    recBadge.textContent = tab.recencyLabel;
+
+    badgesBox.appendChild(catBadge);
+    badgesBox.appendChild(recBadge);
+
+    item.appendChild(left);
+    item.appendChild(badgesBox);
+
+    // 1-Click Tab Jump
+    item.addEventListener('click', async () => {
+      await chrome.runtime.sendMessage({
+        action: 'SWITCH_TO_TAB',
+        tabId: tab.id
+      });
+      window.close(); // Close popup after switching
+    });
+
+    spotlightList.appendChild(item);
+  }
+}
+
+function createFallbackIcon(title) {
+  const box = document.createElement('span');
+  box.className = 'spotlight-fav-fallback';
+  box.textContent = (title || 'T').charAt(0).toUpperCase();
+  return box;
 }
 
 /**
@@ -246,7 +350,6 @@ async function assignDomainToCategory(domainStr, categoryId) {
   const clean = domainStr.trim().toLowerCase().replace(/^https?:\/\//, '').replace(/^www\./, '').replace(/\/$/, '');
   if (!clean) return;
 
-  // Remove from any other category to avoid duplicates
   for (const cat of currentSettings.categories) {
     if (Array.isArray(cat.domains)) {
       cat.domains = cat.domains.filter((d) => d !== clean);
@@ -329,7 +432,12 @@ async function saveSettings() {
 // Event Listeners
 // ==========================================
 
-// Organize Now button (runs full Chrome History usage-score sort)
+// Search in Tab Spotlight
+spotlightSearch.addEventListener('input', (e) => {
+  renderSpotlightList(e.target.value);
+});
+
+// Organize Now button
 btnOrganize.addEventListener('click', async () => {
   btnOrganize.disabled = true;
   labelOrganize.textContent = 'Sorting...';
