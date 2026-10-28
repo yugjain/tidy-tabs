@@ -21,12 +21,12 @@
         <div class="brand-text">
           <div class="brand-title">
             <span>Tidy Tabs</span>
-            <span class="version-tag">2.2</span>
+            <span class="version-tag">2.2.1</span>
           </div>
           <span class="brand-sub">Power User Organizer</span>
         </div>
       </div>
-      <div class="status-indicator" title="Automatic full Usage-Score sorting every 5 minutes">
+      <div class="status-indicator" title="Automatic full Usage-Score sorting every 5 minutes • Multitasking grace period">
         <span class="status-dot"></span>
         <span class="status-label">Auto: 5m</span>
       </div>
@@ -179,13 +179,25 @@
             <span class="switch-title">Zen Focus Mode</span>
             <span class="badge-mini-shortcut">⌘⇧F</span>
           </div>
-          <span class="switch-desc">Collapse distractions (audio &amp; active groups stay open!)</span>
+          <span class="switch-desc">Auto-collapse idle groups (multitasking &amp; audio stay open!)</span>
         </div>
         <div class="switch-container">
           <input type="checkbox" id="toggle-focus-mode" class="switch-input">
           <span class="switch-track"></span>
         </div>
       </label>
+
+      <!-- Multitasking Working-Set Grace Period Slider -->
+      <div class="slider-block">
+        <div class="slider-meta">
+          <span class="slider-title">Multitasking Grace Period</span>
+          <span class="slider-val-badge" id="grace-display">4 Mins</span>
+        </div>
+        <div class="slider-track-wrap">
+          <input type="range" id="grace-slider" min="1" max="15" step="1" value="4" class="custom-slider">
+        </div>
+        <span class="slider-subtext">Recently touched groups stay expanded while switching tabs</span>
+      </div>
 
       <!-- History Clutter & RAM Hibernation Switch -->
       <label class="switch-row" for="toggle-smart-history">

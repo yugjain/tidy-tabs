@@ -60,7 +60,14 @@ Control your entire browser tabstrip with zero mouse clicks:
 
 ## ⚡ Superpowers Built for ADHD
 
-### 🔊 Absolute Audio Protection (New in v2.2)
+### 🧠 Multitasking Working-Set Grace Period (New in v2.2.1)
+Ever tried looking up a reference on Google, switching to a sports match or video for 30 seconds, only to find your research group instantly snapped shut under you? That jarring context switch causes **doorway amnesia** and destroys ADHD working memory:
+- **Working-Set Memory**: Any tab group touched within the last **4 minutes** is tagged as **Warm** and **guaranteed to stay expanded** alongside your active tab and media tabs!
+- **Zero Disruption While Multitasking**: Flip back and forth between research, docs, and leisure without tabs collapsing or moving around.
+- **Graceful Collapse**: Once a group has truly been idle for $>4$ minutes, Zen Focus Mode gently closes it into the background.
+- **Customizable Buffer**: Adjust your multitasking grace period (1 to 15 mins, default 4 mins) directly from the popup settings slider.
+
+### 🔊 Absolute Audio Protection
 - **Never Collapsed**: Any group containing a tab playing audio (`tab.audible === true`) is **strictly immune to collapsing**, even in Zen Focus Mode!
 - **Tab Bar Speaker Indicator**: Group titles dynamically update with a speaker icon: `🔊 Entertainment (3)` so you can locate audio in 0.1 seconds.
 - **Zero Audio Hibernation**: Audio tabs are never demoted to Archive or discarded while sound is playing.

@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Tidy Tabs - Smart Tab Organizer",
-  "version": "2.2.0",
-  "description": "Automatically organizes unpinned tabs into native Tab Groups with audio protection, Tab Vault stashing, and keyboard shortcuts.",
+  "version": "2.2.1",
+  "description": "Automatically organizes unpinned tabs into native Tab Groups with audio protection, multitasking grace period, Tab Vault stashing, and keyboard shortcuts.",
   "permissions": [
     "tabs",
     "tabGroups",

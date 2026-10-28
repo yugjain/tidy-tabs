@@ -1,6 +1,7 @@
 /**
- * Tidy Tabs v2.2 - Background Service Worker (Manifest V3)
+ * Tidy Tabs v2.2.1 - Background Service Worker (Manifest V3)
  * Features for ADHD Power Users:
+ * - Multitasking Working-Set Grace Period (3-4 mins): Recently touched groups stay expanded while switching tabs
  * - Absolute Audio Protection: Active audio tabs/groups are NEVER collapsed (even in Focus Mode)
  * - Immune to idle Archive demotion & RAM discarding while playing sound
  * - Native Tab Bar Speaker Indicator: '🔊 Entertainment (3)'
@@ -236,6 +237,7 @@ const DEFAULT_SETTINGS = {
   smartHistoryArchive: true,
   autoHibernateArchive: true,
   focusMode: false,
+  gracePeriodMinutes: 4,
   autoSyncMinutes: 5,
   debounceMs: 500,
   categories: DEFAULT_CATEGORIES
@@ -254,6 +256,7 @@ const HISTORY_CACHE_TTL_MS = 10 * 60 * 1000;
 
 const windowLocks = new Map();
 const debounceTimers = new Map();
+const graceTimers = new Map();
 
 export function normalizeUrl(rawUrl) {
   if (!rawUrl || typeof rawUrl !== 'string') return '';
@@ -342,6 +345,25 @@ function scheduleOrganize(windowId, delay = cachedSettings.debounceMs || 500, op
     runLocked(windowId, () => organizeWindow(windowId, options));
   }, delay);
   debounceTimers.set(windowId, timer);
+}
+
+function scheduleGraceCheck(windowId, delayMs) {
+  if (graceTimers.has(windowId)) {
+    clearTimeout(graceTimers.get(windowId));
+  }
+  const timer = setTimeout(() => {
+    graceTimers.delete(windowId);
+    runLocked(windowId, () => organizeWindow(windowId, { forceSort: false }));
+  }, delayMs);
+  graceTimers.set(windowId, timer);
+
+  // Background fallback alarm in case service worker enters dormancy
+  try {
+    const delayMin = Math.max(1, Math.ceil(delayMs / 60000));
+    chrome.alarms.create(`grace-check-${windowId}`, { delayInMinutes: delayMin });
+  } catch {
+    // Ignore alarm errors in unit test environments
+  }
 }
 
 async function persistStorage() {
@@ -759,17 +781,27 @@ async function organizeWindow(windowId, options = { forceSort: false }) {
         }
       }
 
-      // ABSOLUTE AUDIO & ACTIVE PROTECTION:
-      // Never collapse if viewing the tab OR if playing audio!
+      // ABSOLUTE AUDIO, ACTIVE & MULTITASKING GRACE PROTECTION:
+      // Never collapse if viewing the tab, playing audio, or interacted with recently!
       const hasActiveTab = bucket.tabs.some((t) => t.active);
       const hasAudibleTab = bucket.tabs.some((t) => t.audible);
+
+      const gracePeriodMin = Number(cachedSettings.gracePeriodMinutes ?? 4);
+      const graceMs = Math.max(1, gracePeriodMin) * 60 * 1000;
+      const isWarmGroup = bucket.tabs.some((t) => {
+        const ts = cachedTimestamps[t.id] || t.lastAccessed || 0;
+        return (now - ts) < graceMs;
+      });
+
       let desiredCollapsed = false;
 
       if (hasActiveTab || hasAudibleTab) {
         desiredCollapsed = false; // Strictly expanded!
-      } else if (cachedSettings.focusMode) {
-        desiredCollapsed = true;
       } else if (cat.id === 'archive') {
+        desiredCollapsed = true;
+      } else if (isWarmGroup) {
+        desiredCollapsed = false; // Multitasking Working-Set Grace: keeps recently touched groups open!
+      } else if (cachedSettings.focusMode) {
         desiredCollapsed = true;
       } else if (existingGroup) {
         desiredCollapsed = Boolean(existingGroup.collapsed);
@@ -822,6 +854,34 @@ async function organizeWindow(windowId, options = { forceSort: false }) {
       }
     } catch (err) {
       console.warn(`[TidyTabs] Grouping error for category ${cat.name}:`, err);
+    }
+  }
+
+  // If Zen Focus Mode is active, schedule an auto-check for when the earliest warm group expires
+  if (cachedSettings.focusMode) {
+    let nextWarmExpiryMs = Infinity;
+    const gracePeriodMin = Number(cachedSettings.gracePeriodMinutes ?? 4);
+    const graceMs = Math.max(1, gracePeriodMin) * 60 * 1000;
+
+    for (const bucket of buckets.values()) {
+      const hasActive = bucket.tabs.some((t) => t.active);
+      const hasAudible = bucket.tabs.some((t) => t.audible);
+      if (!hasActive && !hasAudible) {
+        for (const t of bucket.tabs) {
+          const ts = cachedTimestamps[t.id] || t.lastAccessed || 0;
+          const elapsed = now - ts;
+          if (elapsed < graceMs) {
+            const remaining = graceMs - elapsed;
+            if (remaining < nextWarmExpiryMs) {
+              nextWarmExpiryMs = remaining;
+            }
+          }
+        }
+      }
+    }
+
+    if (nextWarmExpiryMs !== Infinity && nextWarmExpiryMs > 0) {
+      scheduleGraceCheck(windowId, nextWarmExpiryMs + 1000);
     }
   }
 }
@@ -1001,10 +1061,17 @@ chrome.tabs.onRemoved.addListener(async (tabId) => {
   }
 });
 
-// Periodic 5-minute alarm: Strict full Usage-Score sorting and clustering
+// Periodic 5-minute alarm & warm group expiration checks
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === 'tidy-tabs-reorganize') {
     organizeAllWindows({ forceSort: true });
+  } else if (alarm.name.startsWith('grace-check-')) {
+    const winId = Number(alarm.name.replace('grace-check-', ''));
+    if (!isNaN(winId)) {
+      runLocked(winId, () => organizeWindow(winId, { forceSort: false }));
+    } else {
+      organizeAllWindows({ forceSort: false });
+    }
   }
 });
 
@@ -1093,7 +1160,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
         // Recency heatmap determination
         const ts = cachedTimestamps[tab.id] || tab.lastAccessed || now;
-        const idleHours = (now - ts) / 3600000;
+        const elapsedMs = Math.max(0, now - ts);
+        const idleHours = elapsedMs / 3600000;
+        const graceMin = Number(cachedSettings.gracePeriodMinutes ?? 4);
+        const graceMs = Math.max(1, graceMin) * 60 * 1000;
+
         let recencyStatus = 'recent';
         let recencyLabel = `${Math.max(1, Math.round(idleHours))}h ago`;
 
@@ -1110,12 +1181,17 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         } else if (tab.active) {
           recencyStatus = 'active';
           recencyLabel = 'Active Now';
+        } else if (elapsedMs < graceMs) {
+          recencyStatus = 'warm';
+          const mins = Math.max(1, Math.round(elapsedMs / 60000));
+          recencyLabel = `Warm (${mins}m)`;
         } else if (tab.discarded) {
           recencyStatus = 'sleeping';
           recencyLabel = 'Sleeping';
         } else if (idleHours < 1) {
           recencyStatus = 'fresh';
-          recencyLabel = 'Fresh (<1h)';
+          const mins = Math.max(1, Math.round(elapsedMs / 60000));
+          recencyLabel = `${mins}m ago`;
         } else if (idleHours > 48) {
           recencyStatus = 'idle';
           recencyLabel = `${Math.round(idleHours / 24)}d idle`;

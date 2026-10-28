@@ -59,6 +59,8 @@ const uncategorizedList = document.getElementById('uncategorized-list');
 // Toggles & Controls
 const toggleFocusMode = document.getElementById('toggle-focus-mode');
 const toggleSmartHistory = document.getElementById('toggle-smart-history');
+const graceSlider = document.getElementById('grace-slider');
+const graceDisplay = document.getElementById('grace-display');
 const ttlSlider = document.getElementById('ttl-slider');
 const ttlDisplay = document.getElementById('ttl-display');
 
@@ -146,6 +148,12 @@ async function loadState() {
     // 5. Toggles & TTL Slider
     toggleFocusMode.checked = Boolean(currentSettings.focusMode);
     toggleSmartHistory.checked = currentSettings.smartHistoryArchive !== false;
+
+    if (graceSlider && graceDisplay) {
+      const graceMin = currentSettings.gracePeriodMinutes || 4;
+      graceSlider.value = graceMin;
+      graceDisplay.textContent = `${graceMin} ${graceMin === 1 ? 'Min' : 'Mins'}`;
+    }
 
     if (currentSettings.ttlDays) {
       ttlSlider.value = currentSettings.ttlDays;
@@ -703,6 +711,24 @@ toggleSmartHistory.addEventListener('change', async (e) => {
   await loadState();
   showToast(e.target.checked ? 'Smart History & RAM Saver on' : 'Smart History disabled');
 });
+
+// Multitasking Grace Period Slider
+if (graceSlider) {
+  graceSlider.addEventListener('input', (e) => {
+    const val = Number(e.target.value);
+    if (graceDisplay) graceDisplay.textContent = `${val} ${val === 1 ? 'Min' : 'Mins'}`;
+  });
+
+  graceSlider.addEventListener('change', async (e) => {
+    const val = Number(e.target.value);
+    if (currentSettings) {
+      currentSettings.gracePeriodMinutes = val;
+      await saveSettings();
+      await loadState();
+      showToast(`Multitasking grace period set to ${val} mins`);
+    }
+  });
+}
 
 // TTL Slider
 ttlSlider.addEventListener('input', (e) => {
