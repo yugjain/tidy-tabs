@@ -1,15 +1,16 @@
 /**
- * Tidy Tabs v2.1 - Background Service Worker (Manifest V3)
- * Features:
+ * Tidy Tabs v2.2 - Background Service Worker (Manifest V3)
+ * Features for ADHD Power Users:
+ * - Absolute Audio Protection: Active audio tabs/groups are NEVER collapsed (even in Focus Mode)
+ * - Immune to idle Archive demotion & RAM discarding while playing sound
+ * - Native Tab Bar Speaker Indicator: '🔊 Entertainment (3)'
+ * - Global Keyboard Shortcuts: Cmd+Shift+O (Tidy), Cmd+Shift+F (Focus), Cmd+Shift+S (Stash)
+ * - Tab Vault ("Parking Lot"): Zero-guilt stashing of idle tabs with instant 1-click restore
  * - Dynamic domain auto-clustering (>= 2 unassigned tabs spawn dedicated groups, e.g. Airbnb, Figma)
- * - Strict 5-minute periodic auto-sweep (chrome.alarms) with full Usage Score re-sorting
- * - Dynamic native group title indicators: '● Work (4)', 'Figma (2)'
+ * - Strict 5-minute periodic auto-sweep with full Usage Score sorting
+ * - In-popup Tab Spotlight engine: real-time recency heatmap & audio status
  * - Chrome History visit frequency & composite Usage Score intelligence
- * - Legacy 'Core' & 'TimePass' context retention during initial dissection
- * - In-popup Tab Spotlight engine: real-time recency badges (Active, Fresh, Idle, Sleeping)
- * - Zero-flicker diff-based tab grouping & smart Focus Mode
- * - Automatic RAM Hibernation (chrome.tabs.discard) for Archived tabs
- * - Cross-restart URL metadata persistence + 1-click deduplication & pruning
+ * - Automatic RAM Hibernation (chrome.tabs.discard) for silent Archived tabs
  */
 
 export const DEFAULT_CATEGORIES = [
@@ -164,7 +165,6 @@ export const ARCHIVE_CATEGORY = {
 
 const DYNAMIC_PALETTE = ['purple', 'pink', 'cyan', 'orange'];
 
-// Secondary keyword heuristics for URL path & tab title when domain is unknown
 const HEURISTIC_RULES = [
   {
     categoryId: 'work',
@@ -241,24 +241,20 @@ const DEFAULT_SETTINGS = {
   categories: DEFAULT_CATEGORIES
 };
 
-// In-memory state cache synchronized with chrome.storage.local
+// State caches
 let cachedTimestamps = {}; // { [tabId]: number }
 let cachedUrlMetadata = {}; // { [normalizedUrl]: { lastAccessed: number, legacyCategoryHint?: string } }
 let cachedDynamicClusters = {}; // { [domain]: { id: string, name: string, color: string } }
+let cachedVaultSessions = []; // Array of stashed sessions
 let cachedSettings = { ...DEFAULT_SETTINGS };
 let isInitialized = false;
 
-// In-memory Chrome History visit cache: { [url]: { visits: number, fetchedAt: number } }
 const historyVisitCache = new Map();
-const HISTORY_CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
+const HISTORY_CACHE_TTL_MS = 10 * 60 * 1000;
 
-// Per-window concurrency mutex and debounce timers
 const windowLocks = new Map();
 const debounceTimers = new Map();
 
-/**
- * Normalize URLs for deduplication and cross-restart persistence.
- */
 export function normalizeUrl(rawUrl) {
   if (!rawUrl || typeof rawUrl !== 'string') return '';
   try {
@@ -281,9 +277,6 @@ export function normalizeUrl(rawUrl) {
   }
 }
 
-/**
- * Clean and extract main hostname from URL.
- */
 export function extractCleanDomain(rawUrl) {
   if (!rawUrl || typeof rawUrl !== 'string') return '';
   try {
@@ -305,9 +298,6 @@ export function extractCleanDomain(rawUrl) {
   }
 }
 
-/**
- * Format domain string into a clean title (e.g. 'airbnb.com' -> 'Airbnb').
- */
 export function formatDomainTitle(domain) {
   if (!domain) return 'Other';
   const parts = domain.split('.');
@@ -318,9 +308,6 @@ export function formatDomainTitle(domain) {
   return main.charAt(0).toUpperCase() + main.slice(1);
 }
 
-/**
- * Deterministically assign a vibrant color to a domain string.
- */
 export function getDynamicColor(domain) {
   let hash = 0;
   for (let i = 0; i < domain.length; i++) {
@@ -330,17 +317,11 @@ export function getDynamicColor(domain) {
   return DYNAMIC_PALETTE[Math.abs(hash) % DYNAMIC_PALETTE.length];
 }
 
-/**
- * Strip dynamic prefix/suffix from group titles (e.g. '● Work (4)' -> 'Work').
- */
 export function extractBaseGroupName(rawTitle) {
   if (!rawTitle) return '';
-  return rawTitle.replace(/^●\s*/, '').replace(/\s*\(\d+\)$/, '').trim();
+  return rawTitle.replace(/^(?:●|🔊)\s*/u, '').replace(/\s*\(\d+\)$/, '').trim();
 }
 
-/**
- * Execute a task serially per window to prevent race conditions during tab grouping/moving.
- */
 function runLocked(windowId, task) {
   const currentLock = windowLocks.get(windowId) || Promise.resolve();
   const nextLock = currentLock
@@ -352,9 +333,6 @@ function runLocked(windowId, task) {
   return nextLock;
 }
 
-/**
- * Debounce wrapper for organizing a specific window.
- */
 function scheduleOrganize(windowId, delay = cachedSettings.debounceMs || 500, options = { forceSort: false }) {
   if (debounceTimers.has(windowId)) {
     clearTimeout(debounceTimers.get(windowId));
@@ -366,9 +344,6 @@ function scheduleOrganize(windowId, delay = cachedSettings.debounceMs || 500, op
   debounceTimers.set(windowId, timer);
 }
 
-/**
- * Persist state changes to chrome.storage.local.
- */
 async function persistStorage() {
   try {
     const entries = Object.entries(cachedUrlMetadata);
@@ -379,21 +354,26 @@ async function persistStorage() {
     await chrome.storage.local.set({
       tabTimestamps: cachedTimestamps,
       urlMetadata: cachedUrlMetadata,
-      dynamicClusters: cachedDynamicClusters
+      dynamicClusters: cachedDynamicClusters,
+      stashedSessions: cachedVaultSessions
     });
   } catch (err) {
     console.warn('[TidyTabs] Storage write error:', err);
   }
 }
 
-/**
- * Initialize state from storage and synchronize with currently open tabs.
- */
 async function initializeState() {
-  const data = await chrome.storage.local.get(['tabTimestamps', 'urlMetadata', 'dynamicClusters', 'settings']);
+  const data = await chrome.storage.local.get([
+    'tabTimestamps',
+    'urlMetadata',
+    'dynamicClusters',
+    'stashedSessions',
+    'settings'
+  ]);
   cachedTimestamps = data.tabTimestamps || {};
   cachedUrlMetadata = data.urlMetadata || {};
   cachedDynamicClusters = data.dynamicClusters || {};
+  cachedVaultSessions = Array.isArray(data.stashedSessions) ? data.stashedSessions : [];
   cachedSettings = { ...DEFAULT_SETTINGS, ...(data.settings || {}) };
 
   if (!cachedSettings.categories || cachedSettings.categories.length === 0) {
@@ -444,10 +424,6 @@ async function initializeState() {
   isInitialized = true;
 }
 
-/**
- * Inspect existing non-TidyTabs groups (like 'Core', 'CORE', 'TimePass') and record origin hints
- * before dissecting them.
- */
 function captureLegacyGroupHints(tabs, existingGroups) {
   const groupTitleById = new Map();
   for (const g of existingGroups) {
@@ -487,9 +463,6 @@ function captureLegacyGroupHints(tabs, existingGroups) {
   return updated;
 }
 
-/**
- * Query Chrome History visit count for a tab URL (with 10-minute in-memory caching).
- */
 async function getHistoryVisitCount(rawUrl) {
   if (!rawUrl || !chrome.history) return 1;
   try {
@@ -516,9 +489,6 @@ async function getHistoryVisitCount(rawUrl) {
   }
 }
 
-/**
- * Compute composite Usage Score combining Chrome History visit count and recency.
- */
 export function computeUsageScore(tab, now = Date.now(), visitCount = 1) {
   const normUrl = normalizeUrl(tab.url || tab.pendingUrl || '');
   const timestamp =
@@ -531,13 +501,14 @@ export function computeUsageScore(tab, now = Date.now(), visitCount = 1) {
   const recencyBonus = Math.max(0, 100 - hoursIdle / 2.4);
   const frequencyBonus = Math.min(250, visitCount * 12);
   const activeBonus = tab.active ? 500 : 0;
+  const audioBonus = tab.audible ? 400 : 0; // Audio tabs maintain top priority
 
-  return activeBonus + frequencyBonus + recencyBonus;
+  return activeBonus + audioBonus + frequencyBonus + recencyBonus;
 }
 
 /**
- * Classify a tab into its target category or identify as unassigned candidate for dynamic clustering.
- * Returns { category, matchType, hostname, isCandidateForCluster }
+ * Classify a tab into its target category.
+ * CRITICAL AUDIO PROTECTION: An audible tab (tab.audible === true) is NEVER archived!
  */
 export function classifyTab(tab, now = Date.now(), visitCount = 1) {
   const rawUrl = tab.url || tab.pendingUrl || '';
@@ -553,8 +524,8 @@ export function classifyTab(tab, now = Date.now(), visitCount = 1) {
   const clutterTtlMs = (cachedSettings.clutterTtlDays || 3) * 24 * 60 * 60 * 1000;
   const clutterMaxVisits = cachedSettings.clutterMaxVisits ?? 2;
 
-  // Never archive the currently active tab
-  if (!tab.active) {
+  // ABSOLUTE PROTECTION: Never archive active tabs OR audio-playing tabs!
+  if (!tab.active && !tab.audible) {
     if (idleMs >= standardTtlMs) {
       return { category: ARCHIVE_CATEGORY, matchType: 'archive', hostname: '', isCandidateForCluster: false };
     }
@@ -575,11 +546,10 @@ export function classifyTab(tab, now = Date.now(), visitCount = 1) {
       hostname = urlObj.hostname.toLowerCase().replace(/^www\./, '');
       hostAndPath = (urlObj.hostname + urlObj.pathname).toLowerCase();
     } catch {
-      // Internal or non-standard URL
+      // Internal URL
     }
   }
 
-  // 1. Explicit domain rules (Work, Entertainment, Research, Utilities)
   if (hostAndPath) {
     for (const cat of cachedSettings.categories) {
       if (Array.isArray(cat.domains)) {
@@ -593,7 +563,6 @@ export function classifyTab(tab, now = Date.now(), visitCount = 1) {
     }
   }
 
-  // 2. URL & Title keyword heuristics
   const title = (tab.title || '').toLowerCase();
   for (const rule of HEURISTIC_RULES) {
     const matchedUrl = rule.urlPatterns.some((rx) => rx.test(rawUrl));
@@ -606,7 +575,6 @@ export function classifyTab(tab, now = Date.now(), visitCount = 1) {
     }
   }
 
-  // 3. Legacy Group Context Hint ('Core' -> Work, 'TimePass' -> Entertainment)
   const legacyHint = normUrl && cachedUrlMetadata[normUrl]?.legacyCategoryHint;
   if (legacyHint) {
     const hintedCat = cachedSettings.categories.find((c) => c.id === legacyHint);
@@ -615,7 +583,6 @@ export function classifyTab(tab, now = Date.now(), visitCount = 1) {
     }
   }
 
-  // 4. Candidate for dynamic auto-clustering!
   const cleanDomain = extractCleanDomain(rawUrl);
   const fallback = cachedSettings.categories.find((c) => c.id === 'utilities') || cachedSettings.categories[0];
   return {
@@ -628,10 +595,10 @@ export function classifyTab(tab, now = Date.now(), visitCount = 1) {
 
 /**
  * Diff-based, zero-flicker window organization:
- * - Dynamically clusters domains with >= 2 tabs into dedicated groups (persisting until 0 tabs).
- * - Native titles show active indicator and tab counts (e.g. '● Work (4)', 'Figma (2)').
- * - 5-minute periodic auto-sweep re-sorts tabs by Chrome History Usage Score.
- * - Auto-hibernates non-active tabs in Archive.
+ * - AUDIO PROTECTION: Any group containing tab.audible is NEVER collapsed!
+ * - Groups with audio display speaker symbol '🔊 Title (N)'.
+ * - Dynamic domain auto-clustering (>= 2 tabs spawn dedicated group).
+ * - 5-minute strict Usage-Score re-sorting.
  */
 async function organizeWindow(windowId, options = { forceSort: false }) {
   if (!isInitialized) {
@@ -647,14 +614,12 @@ async function organizeWindow(windowId, options = { forceSort: false }) {
 
   const existingGroups = await chrome.tabGroups.query({ windowId });
 
-  // Capture 'Core' and 'TimePass' legacy hints before moving tabs out of those groups
   if (captureLegacyGroupHints(unpinnedTabs, existingGroups)) {
     await persistStorage();
   }
 
   const now = Date.now();
 
-  // Fetch Chrome History visit counts in parallel
   const visitCounts = new Map();
   await Promise.all(
     unpinnedTabs.map(async (tab) => {
@@ -663,7 +628,6 @@ async function organizeWindow(windowId, options = { forceSort: false }) {
     })
   );
 
-  // 1. Initial classification and collect cluster candidates
   const preliminaryAssignments = [];
   const candidateDomainCounts = new Map();
 
@@ -678,8 +642,6 @@ async function organizeWindow(windowId, options = { forceSort: false }) {
     }
   }
 
-  // 2. Identify active dynamic clusters:
-  // Condition: >= 2 tabs on domain OR existing active cluster with >= 1 tab
   let clustersChanged = false;
   const activeWindowClusters = new Map();
 
@@ -701,7 +663,6 @@ async function organizeWindow(windowId, options = { forceSort: false }) {
     }
   }
 
-  // Clean up any dynamic clusters that have 0 tabs
   for (const domain of Object.keys(cachedDynamicClusters)) {
     if (!candidateDomainCounts.has(domain) || candidateDomainCounts.get(domain) === 0) {
       delete cachedDynamicClusters[domain];
@@ -713,8 +674,6 @@ async function organizeWindow(windowId, options = { forceSort: false }) {
     await persistStorage();
   }
 
-  // 3. Define target category order:
-  // Work -> Entertainment -> Research -> [Dynamic Domain Groups] -> Utilities -> Archive
   const corePreCategories = cachedSettings.categories.filter((c) => c.id !== 'utilities');
   const dynamicCategories = Array.from(activeWindowClusters.values()).sort((a, b) => a.name.localeCompare(b.name));
   const utilitiesCategory = cachedSettings.categories.find((c) => c.id === 'utilities') || {
@@ -729,7 +688,6 @@ async function organizeWindow(windowId, options = { forceSort: false }) {
     ARCHIVE_CATEGORY
   ];
 
-  // 4. Bucket tabs into resolved categories
   const buckets = new Map();
   for (const cat of targetCategoryOrder) {
     buckets.set(cat.id, {
@@ -742,7 +700,6 @@ async function organizeWindow(windowId, options = { forceSort: false }) {
     const { tab, classification } = item;
     let targetCat = classification.category;
 
-    // Check if candidate belongs to an active dynamic domain cluster
     if (classification.isCandidateForCluster && activeWindowClusters.has(classification.hostname)) {
       targetCat = activeWindowClusters.get(classification.hostname);
     }
@@ -753,7 +710,6 @@ async function organizeWindow(windowId, options = { forceSort: false }) {
     buckets.get(targetCat.id).tabs.push(tab);
   }
 
-  // 5. Sort inside each bucket by Chrome History Usage Score (or existing index if diffing)
   for (const bucket of buckets.values()) {
     if (options.forceSort) {
       bucket.tabs.sort((a, b) => {
@@ -766,7 +722,6 @@ async function organizeWindow(windowId, options = { forceSort: false }) {
     }
   }
 
-  // Map existing groups by base title (e.g. '● Work (4)' matches 'Work')
   const groupsByBaseTitle = new Map();
   for (const g of existingGroups) {
     const base = extractBaseGroupName(g.title);
@@ -804,12 +759,14 @@ async function organizeWindow(windowId, options = { forceSort: false }) {
         }
       }
 
-      // Desired collapsed state
+      // ABSOLUTE AUDIO & ACTIVE PROTECTION:
+      // Never collapse if viewing the tab OR if playing audio!
       const hasActiveTab = bucket.tabs.some((t) => t.active);
+      const hasAudibleTab = bucket.tabs.some((t) => t.audible);
       let desiredCollapsed = false;
 
-      if (hasActiveTab) {
-        desiredCollapsed = false;
+      if (hasActiveTab || hasAudibleTab) {
+        desiredCollapsed = false; // Strictly expanded!
       } else if (cachedSettings.focusMode) {
         desiredCollapsed = true;
       } else if (cat.id === 'archive') {
@@ -820,9 +777,9 @@ async function organizeWindow(windowId, options = { forceSort: false }) {
         desiredCollapsed = Boolean(cat.collapsed);
       }
 
-      // Dynamic Title with live tab count and active indicator:
-      // e.g. '● Work (4)' or 'Work (4)'
-      const dynamicTitle = `${hasActiveTab ? '● ' : ''}${cat.name} (${bucket.tabs.length})`;
+      // Title formatting: Speaker symbol has highest visual urgency
+      const titlePrefix = hasAudibleTab ? '🔊 ' : (hasActiveTab ? '● ' : '');
+      const dynamicTitle = `${titlePrefix}${cat.name} (${bucket.tabs.length})`;
       const desiredColor = cat.color || 'blue';
 
       const needsMetadataUpdate =
@@ -839,7 +796,6 @@ async function organizeWindow(windowId, options = { forceSort: false }) {
         });
       }
 
-      // Check group index ordering
       const currentTabsInWindow = await chrome.tabs.query({ windowId, groupId });
       const currentFirstIndex =
         currentTabsInWindow.length > 0
@@ -852,7 +808,7 @@ async function organizeWindow(windowId, options = { forceSort: false }) {
 
       nextInsertIndex += allBucketTabIds.length;
 
-      // Auto-Hibernate non-active tabs in Archive
+      // Auto-Hibernate silent tabs in Archive
       if (cat.id === 'archive' && cachedSettings.autoHibernateArchive !== false) {
         for (const tab of bucket.tabs) {
           if (!tab.active && !tab.discarded && !tab.audible) {
@@ -870,9 +826,6 @@ async function organizeWindow(windowId, options = { forceSort: false }) {
   }
 }
 
-/**
- * Organize all normal browser windows.
- */
 async function organizeAllWindows(options = { forceSort: false }) {
   try {
     const windows = await chrome.windows.getAll({ windowTypes: ['normal'] });
@@ -884,9 +837,6 @@ async function organizeAllWindows(options = { forceSort: false }) {
   }
 }
 
-/**
- * Find duplicate unpinned tabs in a window (matching normalized URL).
- */
 function findDuplicateTabIds(unpinnedTabs) {
   const byNormUrl = new Map();
   for (const tab of unpinnedTabs) {
@@ -916,6 +866,80 @@ function findDuplicateTabIds(unpinnedTabs) {
   return duplicateIds;
 }
 
+/**
+ * Tab Vault Stashing Engine:
+ * Saves specified tabs into a named, timestamped session and closes them in the browser.
+ */
+async function stashTabsList(tabsToStash, customSessionName = null) {
+  if (!tabsToStash || tabsToStash.length === 0) return null;
+
+  const now = Date.now();
+  const dateStr = new Date(now).toLocaleDateString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit'
+  });
+
+  const session = {
+    id: `vault_${now}_${Math.random().toString(36).slice(2, 7)}`,
+    name: customSessionName || `Stashed Session (${dateStr})`,
+    timestamp: now,
+    tabCount: tabsToStash.length,
+    tabs: tabsToStash.map((t) => ({
+      title: t.title || 'Untitled',
+      url: t.url || '',
+      favIconUrl: t.favIconUrl || ''
+    }))
+  };
+
+  cachedVaultSessions.unshift(session);
+  if (cachedVaultSessions.length > 60) {
+    cachedVaultSessions = cachedVaultSessions.slice(0, 60);
+  }
+
+  await persistStorage();
+
+  const idsToClose = tabsToStash.map((t) => t.id).filter(Boolean);
+  if (idsToClose.length > 0) {
+    try {
+      await chrome.tabs.remove(idsToClose);
+    } catch (err) {
+      console.warn('[TidyTabs] Error closing stashed tabs:', err);
+    }
+  }
+
+  return session;
+}
+
+/**
+ * Stash inactive tabs (Archive or idle > 24h) for a window.
+ */
+async function stashInactiveTabsForWindow(windowId) {
+  const tabs = await chrome.tabs.query({ windowId });
+  const unpinned = tabs.filter((t) => !t.pinned && !t.active && !t.audible);
+
+  const now = Date.now();
+  const eligible = [];
+  for (const tab of unpinned) {
+    const visits = await getHistoryVisitCount(tab.url || tab.pendingUrl || '');
+    const { category } = classifyTab(tab, now, visits);
+    const ts = cachedTimestamps[tab.id] || tab.lastAccessed || now;
+    const idleHours = (now - ts) / 3600000;
+
+    if (category.id === 'archive' || idleHours >= 24) {
+      eligible.push(tab);
+    }
+  }
+
+  if (eligible.length > 0) {
+    const session = await stashTabsList(eligible);
+    await runLocked(windowId, () => organizeWindow(windowId, { forceSort: false }));
+    return session;
+  }
+  return null;
+}
+
 // ==========================================
 // Chrome Event Listeners
 // ==========================================
@@ -935,7 +959,7 @@ chrome.tabs.onActivated.addListener(async (activeInfo) => {
       };
     }
   } catch {
-    // Tab may have closed
+    // Tab closed
   }
 
   await persistStorage();
@@ -944,6 +968,13 @@ chrome.tabs.onActivated.addListener(async (activeInfo) => {
 
 chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
   if (tab.pinned) return;
+
+  // Immediate reaction if audio starts/stops or mutes
+  if (changeInfo.audible !== undefined || changeInfo.mutedInfo !== undefined) {
+    if (!isInitialized) await initializeState();
+    scheduleOrganize(tab.windowId, 50, { forceSort: false });
+    return;
+  }
 
   if (changeInfo.status === 'complete' || changeInfo.url) {
     if (!isInitialized) await initializeState();
@@ -974,6 +1005,23 @@ chrome.tabs.onRemoved.addListener(async (tabId) => {
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === 'tidy-tabs-reorganize') {
     organizeAllWindows({ forceSort: true });
+  }
+});
+
+// Global Keyboard Accelerators
+chrome.commands.onCommand.addListener(async (command) => {
+  if (!isInitialized) await initializeState();
+  const currentWin = await chrome.windows.getCurrent();
+  if (!currentWin) return;
+
+  if (command === 'organize_tabs') {
+    await runLocked(currentWin.id, () => organizeWindow(currentWin.id, { forceSort: true }));
+  } else if (command === 'toggle_focus') {
+    cachedSettings.focusMode = !cachedSettings.focusMode;
+    await chrome.storage.local.set({ settings: cachedSettings });
+    await runLocked(currentWin.id, () => organizeWindow(currentWin.id, { forceSort: false }));
+  } else if (command === 'stash_inactive') {
+    await stashInactiveTabsForWindow(currentWin.id);
   }
 });
 
@@ -1012,6 +1060,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
       const uncategorizedMap = new Map();
       const spotlightTabs = [];
+      const audibleTabs = [];
       let hibernatedCount = 0;
       const now = Date.now();
 
@@ -1042,13 +1091,23 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           uncategorizedMap.set(classification.hostname, prev);
         }
 
-        // Spotlight recency determination
+        // Recency heatmap determination
         const ts = cachedTimestamps[tab.id] || tab.lastAccessed || now;
         const idleHours = (now - ts) / 3600000;
         let recencyStatus = 'recent';
         let recencyLabel = `${Math.max(1, Math.round(idleHours))}h ago`;
 
-        if (tab.active) {
+        if (tab.audible) {
+          recencyStatus = 'audible';
+          recencyLabel = 'Playing Audio';
+          audibleTabs.push({
+            id: tab.id,
+            title: tab.title || 'Audio Stream',
+            url: tab.url || '',
+            favIconUrl: tab.favIconUrl || '',
+            muted: Boolean(tab.mutedInfo?.muted)
+          });
+        } else if (tab.active) {
           recencyStatus = 'active';
           recencyLabel = 'Active Now';
         } else if (tab.discarded) {
@@ -1068,6 +1127,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           url: tab.url || '',
           favIconUrl: tab.favIconUrl || '',
           active: Boolean(tab.active),
+          audible: Boolean(tab.audible),
+          muted: Boolean(tab.mutedInfo?.muted),
           discarded: Boolean(tab.discarded),
           categoryName: finalCategory.name,
           categoryColor: finalCategory.color || 'blue',
@@ -1077,8 +1138,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         });
       }
 
-      // Sort spotlight tabs: Active first, then by usage score
       spotlightTabs.sort((a, b) => {
+        if (a.audible !== b.audible) return a.audible ? -1 : 1;
         if (a.active !== b.active) return a.active ? -1 : 1;
         return b.usageScore - a.usageScore;
       });
@@ -1100,7 +1161,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         duplicateCount: duplicateIds.length,
         uncategorizedDomains,
         dynamicCategories: dynamicCategoriesList,
-        spotlightTabs
+        spotlightTabs,
+        audibleTabs,
+        vaultSessionsCount: cachedVaultSessions.length
       });
     })();
     return true;
@@ -1114,6 +1177,102 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         await chrome.tabs.update(tabId, { active: true });
         await chrome.windows.update(tab.windowId, { focused: true });
       }
+      sendResponse({ success: true });
+    })();
+    return true;
+  }
+
+  if (message.action === 'CLOSE_TAB') {
+    (async () => {
+      const tabId = Number(message.tabId);
+      if (tabId) {
+        await chrome.tabs.remove(tabId);
+      }
+      sendResponse({ success: true });
+    })();
+    return true;
+  }
+
+  if (message.action === 'TOGGLE_MUTE_TAB') {
+    (async () => {
+      const tabId = Number(message.tabId);
+      if (tabId) {
+        const tab = await chrome.tabs.get(tabId);
+        const shouldMute = !tab.mutedInfo?.muted;
+        await chrome.tabs.update(tabId, { muted: shouldMute });
+        sendResponse({ success: true, muted: shouldMute });
+        return;
+      }
+      sendResponse({ success: false });
+    })();
+    return true;
+  }
+
+  if (message.action === 'STASH_INACTIVE_TABS') {
+    (async () => {
+      if (!isInitialized) await initializeState();
+      const currentWin = await chrome.windows.getCurrent();
+      const session = await stashInactiveTabsForWindow(currentWin.id);
+      sendResponse({ success: true, session });
+    })();
+    return true;
+  }
+
+  if (message.action === 'GET_VAULT_SESSIONS') {
+    (async () => {
+      if (!isInitialized) await initializeState();
+      sendResponse({ sessions: cachedVaultSessions });
+    })();
+    return true;
+  }
+
+  if (message.action === 'RESTORE_VAULT_SESSION') {
+    (async () => {
+      if (!isInitialized) await initializeState();
+      const session = cachedVaultSessions.find((s) => s.id === message.sessionId);
+      if (!session || !session.tabs || session.tabs.length === 0) {
+        sendResponse({ success: false });
+        return;
+      }
+
+      const currentWin = await chrome.windows.getCurrent();
+      const createdTabIds = [];
+
+      for (const tabData of session.tabs) {
+        if (tabData.url) {
+          const newTab = await chrome.tabs.create({
+            windowId: currentWin.id,
+            url: tabData.url,
+            active: false
+          });
+          createdTabIds.push(newTab.id);
+        }
+      }
+
+      if (createdTabIds.length > 0) {
+        const groupId = await chrome.tabs.group({ tabIds: createdTabIds });
+        await chrome.tabGroups.update(groupId, {
+          title: session.name.replace(/\s*\([^)]*\)$/, ''),
+          color: 'cyan'
+        });
+      }
+
+      // Optionally delete session if requested
+      if (message.deleteAfterRestore) {
+        cachedVaultSessions = cachedVaultSessions.filter((s) => s.id !== message.sessionId);
+        await persistStorage();
+      }
+
+      sendResponse({ success: true, restoredCount: createdTabIds.length });
+    })();
+    return true;
+  }
+
+  if (message.action === 'DELETE_VAULT_SESSION') {
+    (async () => {
+      if (!isInitialized) await initializeState();
+      cachedVaultSessions = cachedVaultSessions.filter((s) => s.id !== message.sessionId);
+      await persistStorage();
       sendResponse({ success: true });
     })();
     return true;
@@ -1156,7 +1315,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       const archiveTabIds = [];
 
       for (const tab of unpinned) {
-        if (tab.active) continue;
+        if (tab.active || tab.audible) continue; // NEVER close audio tabs!
         const visits = await getHistoryVisitCount(tab.url || tab.pendingUrl || '');
         const { category } = classifyTab(tab, now, visits);
         if (category.id === 'archive') {

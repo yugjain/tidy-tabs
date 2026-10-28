@@ -1,33 +1,62 @@
 /**
- * Tidy Tabs 2.1 - Refined Popup Dashboard & Tab Spotlight Controller
+ * Tidy Tabs 2.2 - ADHD Power User Popup Controller
+ * Features:
+ * - Now-Playing Audio Bar with 1-click mute and jump
+ * - ADHD Overload Shield Banner (stash idle tabs when overwhelmed)
+ * - Tab Vault ("Parking Lot") session storage and 1-click restoration
+ * - Keyboard-driven Spotlight navigation (↑/↓ to cycle, Enter to jump, ⌫ to close)
+ * - Proportional Segmented Tab Strip & Domain Rule Management
  */
 
 let currentSettings = null;
 let activeCategoryKey = 'work';
 let allSpotlightTabs = [];
 let allDynamicCategories = [];
+let currentAudibleTab = null;
+let selectedSpotlightIndex = -1;
 
-// DOM Selectors
+// DOM Elements
 const statTotalSummary = document.getElementById('stat-total-summary');
 const statPinnedInfo = document.getElementById('stat-pinned-info');
 const statHibernatedBadge = document.getElementById('stat-hibernated-badge');
 const segmentedBar = document.getElementById('segmented-bar');
 const ratioLegend = document.getElementById('ratio-legend');
 
+// Audio Bar
+const audioBar = document.getElementById('audio-bar');
+const audioTabTitle = document.getElementById('audio-tab-title');
+const btnAudioMute = document.getElementById('btn-audio-mute');
+const audioMuteLabel = document.getElementById('audio-mute-label');
+const btnAudioJump = document.getElementById('btn-audio-jump');
+
+// Overload Banner
+const overloadBanner = document.getElementById('overload-banner');
+const overloadMsg = document.getElementById('overload-msg');
+const btnOverloadStash = document.getElementById('btn-overload-stash');
+
+// Action Dock
 const btnOrganize = document.getElementById('btn-organize');
 const labelOrganize = document.getElementById('label-organize');
 const btnDedupe = document.getElementById('btn-dedupe');
 const badgeDuplicates = document.getElementById('badge-duplicates');
-const btnPruneArchive = document.getElementById('btn-prune-archive');
-const badgeArchive = document.getElementById('badge-archive');
+const btnToggleVault = document.getElementById('btn-toggle-vault');
+const badgeVault = document.getElementById('badge-vault');
 
+// Tab Vault Drawer
+const vaultDrawer = document.getElementById('vault-drawer');
+const vaultSessionsList = document.getElementById('vault-sessions-list');
+const btnStashNow = document.getElementById('btn-stash-now');
+
+// Tab Spotlight
 const spotlightSearch = document.getElementById('spotlight-search');
 const spotlightList = document.getElementById('spotlight-list');
 
+// Groups & Categories
 const groupBreakdown = document.getElementById('group-breakdown');
 const uncategorizedSection = document.getElementById('uncategorized-section');
 const uncategorizedList = document.getElementById('uncategorized-list');
 
+// Toggles & Controls
 const toggleFocusMode = document.getElementById('toggle-focus-mode');
 const toggleSmartHistory = document.getElementById('toggle-smart-history');
 const ttlSlider = document.getElementById('ttl-slider');
@@ -64,7 +93,6 @@ async function loadState() {
     allSpotlightTabs = res.spotlightTabs || [];
     allDynamicCategories = res.dynamicCategories || [];
 
-    // Header summaries
     const totalTabs = res.totalTabs || 0;
     const unpinnedCount = res.unpinnedCount || 0;
     const pinnedCount = res.pinnedCount || 0;
@@ -74,16 +102,35 @@ async function loadState() {
     statPinnedInfo.textContent = `${pinnedCount} Pinned (Ignored)`;
     statHibernatedBadge.textContent = `${hibernatedCount} sleeping`;
 
-    // Action buttons & count badges
+    // 1. Now-Playing Audio Bar
+    const audibleTabs = res.audibleTabs || [];
+    if (audibleTabs.length > 0) {
+      currentAudibleTab = audibleTabs[0];
+      audioTabTitle.textContent = currentAudibleTab.title;
+      audioMuteLabel.textContent = currentAudibleTab.muted ? 'Unmute' : 'Mute';
+      audioBar.style.display = 'flex';
+    } else {
+      currentAudibleTab = null;
+      audioBar.style.display = 'none';
+    }
+
+    // 2. ADHD Overload Banner (Suggest stashing when tabs > 25)
+    if (unpinnedCount > 25) {
+      overloadMsg.textContent = `${unpinnedCount} tabs open — feeling crowded?`;
+      overloadBanner.style.display = 'flex';
+    } else {
+      overloadBanner.style.display = 'none';
+    }
+
+    // 3. Action Dock & Vault Badge
     const dupCount = res.duplicateCount || 0;
-    const archCount = res.counts?.archive || 0;
-
     badgeDuplicates.textContent = dupCount;
-    badgeArchive.textContent = archCount;
     btnDedupe.disabled = dupCount === 0;
-    btnPruneArchive.disabled = archCount === 0;
 
-    // Combined category list: Core categories + Dynamic Domain Clusters + Archive
+    const vaultCount = res.vaultSessionsCount || 0;
+    badgeVault.textContent = vaultCount;
+
+    // 4. Combined Categories
     const activeCategories = [
       ...res.settings.categories.filter((c) => c.id !== 'utilities'),
       ...allDynamicCategories,
@@ -91,19 +138,12 @@ async function loadState() {
       { id: 'archive', name: 'Archive', color: 'grey' }
     ];
 
-    // Render Proportional Segmented Tab Strip & Legend
     renderProportionalBar(res.counts, activeCategories, unpinnedCount);
-
-    // Render Group Rows
     renderGroupRows(res.counts, activeCategories);
-
-    // Render Tab Spotlight
     renderSpotlightList(spotlightSearch.value);
-
-    // Render 1-Click Uncategorized Open Domains
     renderUncategorizedDomains(res.uncategorizedDomains || []);
 
-    // Toggles & TTL Slider
+    // 5. Toggles & TTL Slider
     toggleFocusMode.checked = Boolean(currentSettings.focusMode);
     toggleSmartHistory.checked = currentSettings.smartHistoryArchive !== false;
 
@@ -112,15 +152,19 @@ async function loadState() {
       ttlDisplay.textContent = `${currentSettings.ttlDays} Days`;
     }
 
-    // Render Domain Chips for Active Category
     renderDomainChips();
+
+    // If Vault drawer is open, refresh sessions
+    if (vaultDrawer.style.display === 'flex') {
+      await loadVaultSessions();
+    }
   } catch (err) {
     console.error('Failed to load state from background:', err);
   }
 }
 
 /**
- * Render Proportional Segmented Tab Strip showing live distribution.
+ * Render Proportional Segmented Tab Strip.
  */
 function renderProportionalBar(counts = {}, categories = [], totalUnpinned = 0) {
   segmentedBar.innerHTML = '';
@@ -141,14 +185,12 @@ function renderProportionalBar(counts = {}, categories = [], totalUnpinned = 0) 
 
     const pct = ((count / totalUnpinned) * 100).toFixed(1);
 
-    // Bar segment
     const seg = document.createElement('div');
     seg.className = `bar-segment seg-${cat.color || cat.id}`;
     seg.style.width = `${pct}%`;
     seg.title = `${cat.name}: ${count} tabs (${pct}%)`;
     segmentedBar.appendChild(seg);
 
-    // Legend chip
     const chip = document.createElement('div');
     chip.className = 'legend-chip';
 
@@ -199,7 +241,7 @@ function renderGroupRows(counts = {}, categories = []) {
 }
 
 /**
- * Render the interactive Tab Spotlight list with search filtering.
+ * Render Tab Spotlight with Keyboard Navigation Support.
  */
 function renderSpotlightList(query = '') {
   spotlightList.innerHTML = '';
@@ -222,15 +264,23 @@ function renderSpotlightList(query = '') {
     emptyMsg.style.color = 'var(--text-muted)';
     emptyMsg.textContent = cleanQ ? 'No matching tabs found.' : 'No open tabs.';
     spotlightList.appendChild(emptyMsg);
+    selectedSpotlightIndex = -1;
     return;
   }
 
-  for (const tab of filtered) {
+  // Ensure index stays in bounds
+  if (selectedSpotlightIndex >= filtered.length) {
+    selectedSpotlightIndex = filtered.length - 1;
+  }
+
+  filtered.forEach((tab, index) => {
     const item = document.createElement('div');
     item.className = 'spotlight-item';
+    if (index === selectedSpotlightIndex) {
+      item.classList.add('keyboard-selected');
+    }
     item.title = `Jump to: ${tab.title}\n(${tab.url})`;
 
-    // Left side: Favicon & Title
     const left = document.createElement('div');
     left.className = 'spotlight-left';
 
@@ -256,7 +306,6 @@ function renderSpotlightList(query = '') {
     textBox.appendChild(titleSpan);
     left.appendChild(textBox);
 
-    // Right side: Category badge & Recency status
     const badgesBox = document.createElement('div');
     badgesBox.className = 'spotlight-badges-box';
 
@@ -268,23 +317,34 @@ function renderSpotlightList(query = '') {
     recBadge.className = `badge-recency badge-recency-${tab.recencyStatus}`;
     recBadge.textContent = tab.recencyLabel;
 
+    const closeBtn = document.createElement('span');
+    closeBtn.className = 'spotlight-close-btn';
+    closeBtn.innerHTML = '&times;';
+    closeBtn.title = 'Close this tab';
+    closeBtn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      await chrome.runtime.sendMessage({ action: 'CLOSE_TAB', tabId: tab.id });
+      await loadState();
+      showToast('Closed tab');
+    });
+
     badgesBox.appendChild(catBadge);
     badgesBox.appendChild(recBadge);
+    badgesBox.appendChild(closeBtn);
 
     item.appendChild(left);
     item.appendChild(badgesBox);
 
-    // 1-Click Tab Jump
     item.addEventListener('click', async () => {
       await chrome.runtime.sendMessage({
         action: 'SWITCH_TO_TAB',
         tabId: tab.id
       });
-      window.close(); // Close popup after switching
+      window.close();
     });
 
     spotlightList.appendChild(item);
-  }
+  });
 }
 
 function createFallbackIcon(title) {
@@ -292,6 +352,80 @@ function createFallbackIcon(title) {
   box.className = 'spotlight-fav-fallback';
   box.textContent = (title || 'T').charAt(0).toUpperCase();
   return box;
+}
+
+/**
+ * Load and render saved Tab Vault sessions.
+ */
+async function loadVaultSessions() {
+  try {
+    const res = await chrome.runtime.sendMessage({ action: 'GET_VAULT_SESSIONS' });
+    const sessions = res?.sessions || [];
+    vaultSessionsList.innerHTML = '';
+
+    if (sessions.length === 0) {
+      vaultSessionsList.innerHTML = '<span style="color: var(--text-muted); font-size: 11px; padding: 6px;">Vault is empty. Click "+ Stash Idle Tabs" to park tabs safely!</span>';
+      return;
+    }
+
+    sessions.forEach((s) => {
+      const card = document.createElement('div');
+      card.className = 'vault-session-card';
+
+      const info = document.createElement('div');
+      info.className = 'vault-session-info';
+
+      const name = document.createElement('span');
+      name.className = 'vault-session-name';
+      name.textContent = s.name;
+
+      const meta = document.createElement('span');
+      meta.className = 'vault-session-meta';
+      meta.textContent = `${s.tabCount} tabs saved`;
+
+      info.appendChild(name);
+      info.appendChild(meta);
+
+      const actions = document.createElement('div');
+      actions.className = 'vault-session-actions';
+
+      const restoreBtn = document.createElement('button');
+      restoreBtn.className = 'btn-vault-restore';
+      restoreBtn.textContent = 'Restore';
+      restoreBtn.title = 'Reopen all tabs from this session in a new group';
+      restoreBtn.addEventListener('click', async () => {
+        const rRes = await chrome.runtime.sendMessage({
+          action: 'RESTORE_VAULT_SESSION',
+          sessionId: s.id,
+          deleteAfterRestore: false
+        });
+        await loadState();
+        showToast(`Restored ${rRes?.restoredCount || 0} tabs!`);
+      });
+
+      const delBtn = document.createElement('button');
+      delBtn.className = 'btn-vault-del';
+      delBtn.innerHTML = '&times;';
+      delBtn.title = 'Delete saved session';
+      delBtn.addEventListener('click', async () => {
+        await chrome.runtime.sendMessage({
+          action: 'DELETE_VAULT_SESSION',
+          sessionId: s.id
+        });
+        await loadVaultSessions();
+        showToast('Deleted vault session');
+      });
+
+      actions.appendChild(restoreBtn);
+      actions.appendChild(delBtn);
+
+      card.appendChild(info);
+      card.appendChild(actions);
+      vaultSessionsList.appendChild(card);
+    });
+  } catch (err) {
+    console.error('Failed to load vault sessions:', err);
+  }
 }
 
 /**
@@ -342,9 +476,6 @@ function renderUncategorizedDomains(domains = []) {
   }
 }
 
-/**
- * Assign a domain pattern to a target category and regroup tabs.
- */
 async function assignDomainToCategory(domainStr, categoryId) {
   if (!currentSettings) return;
   const clean = domainStr.trim().toLowerCase().replace(/^https?:\/\//, '').replace(/^www\./, '').replace(/\/$/, '');
@@ -365,9 +496,6 @@ async function assignDomainToCategory(domainStr, categoryId) {
   }
 }
 
-/**
- * Render domain chips for the currently selected category tab.
- */
 function renderDomainChips() {
   domainTags.innerHTML = '';
   if (!currentSettings || !currentSettings.categories) return;
@@ -397,9 +525,6 @@ function renderDomainChips() {
   });
 }
 
-/**
- * Remove domain from active category.
- */
 async function removeDomain(domainStr) {
   if (!currentSettings) return;
   const cat = currentSettings.categories.find((c) => c.id === activeCategoryKey);
@@ -411,9 +536,6 @@ async function removeDomain(domainStr) {
   }
 }
 
-/**
- * Persist modified settings to background worker.
- */
 async function saveSettings() {
   try {
     const res = await chrome.runtime.sendMessage({
@@ -429,12 +551,112 @@ async function saveSettings() {
 }
 
 // ==========================================
-// Event Listeners
+// Event Listeners & Keyboard Accelerators
 // ==========================================
+
+// Keyboard navigation in Tab Spotlight (↑, ↓, Enter, ⌫)
+window.addEventListener('keydown', async (e) => {
+  const cleanQ = (spotlightSearch.value || '').trim().toLowerCase();
+  const filtered = cleanQ
+    ? allSpotlightTabs.filter(
+        (t) =>
+          t.title.toLowerCase().includes(cleanQ) ||
+          t.url.toLowerCase().includes(cleanQ) ||
+          t.categoryName.toLowerCase().includes(cleanQ)
+      )
+    : allSpotlightTabs;
+
+  if (filtered.length === 0) return;
+
+  if (e.key === 'ArrowDown') {
+    e.preventDefault();
+    selectedSpotlightIndex = (selectedSpotlightIndex + 1) % filtered.length;
+    renderSpotlightList(spotlightSearch.value);
+    const selectedEl = spotlightList.children[selectedSpotlightIndex];
+    if (selectedEl) selectedEl.scrollIntoView({ block: 'nearest' });
+  } else if (e.key === 'ArrowUp') {
+    e.preventDefault();
+    selectedSpotlightIndex = (selectedSpotlightIndex - 1 + filtered.length) % filtered.length;
+    renderSpotlightList(spotlightSearch.value);
+    const selectedEl = spotlightList.children[selectedSpotlightIndex];
+    if (selectedEl) selectedEl.scrollIntoView({ block: 'nearest' });
+  } else if (e.key === 'Enter') {
+    const targetTab = filtered[selectedSpotlightIndex >= 0 ? selectedSpotlightIndex : 0];
+    if (targetTab) {
+      await chrome.runtime.sendMessage({ action: 'SWITCH_TO_TAB', tabId: targetTab.id });
+      window.close();
+    }
+  } else if ((e.key === 'Backspace' || e.key === 'Delete') && (e.metaKey || document.activeElement !== spotlightSearch)) {
+    if (selectedSpotlightIndex >= 0 && selectedSpotlightIndex < filtered.length) {
+      e.preventDefault();
+      const tabToClose = filtered[selectedSpotlightIndex];
+      await chrome.runtime.sendMessage({ action: 'CLOSE_TAB', tabId: tabToClose.id });
+      await loadState();
+      showToast('Closed tab');
+    }
+  }
+});
 
 // Search in Tab Spotlight
 spotlightSearch.addEventListener('input', (e) => {
+  selectedSpotlightIndex = -1;
   renderSpotlightList(e.target.value);
+});
+
+// Audio Bar Actions
+btnAudioMute.addEventListener('click', async () => {
+  if (!currentAudibleTab) return;
+  const res = await chrome.runtime.sendMessage({
+    action: 'TOGGLE_MUTE_TAB',
+    tabId: currentAudibleTab.id
+  });
+  if (res?.success) {
+    audioMuteLabel.textContent = res.muted ? 'Unmute' : 'Mute';
+    showToast(res.muted ? 'Muted audio tab' : 'Unmuted audio tab');
+  }
+});
+
+btnAudioJump.addEventListener('click', async () => {
+  if (!currentAudibleTab) return;
+  await chrome.runtime.sendMessage({
+    action: 'SWITCH_TO_TAB',
+    tabId: currentAudibleTab.id
+  });
+  window.close();
+});
+
+// Overload Banner Action
+btnOverloadStash.addEventListener('click', async () => {
+  btnOverloadStash.disabled = true;
+  try {
+    const res = await chrome.runtime.sendMessage({ action: 'STASH_INACTIVE_TABS' });
+    await loadState();
+    showToast(`Parked ${res?.session?.tabCount || 0} tabs in the Vault!`);
+  } finally {
+    btnOverloadStash.disabled = false;
+  }
+});
+
+// Vault Drawer Toggle
+btnToggleVault.addEventListener('click', async () => {
+  const isHidden = vaultDrawer.style.display === 'none';
+  vaultDrawer.style.display = isHidden ? 'flex' : 'none';
+  if (isHidden) {
+    await loadVaultSessions();
+  }
+});
+
+// Stash Now button in Vault drawer
+btnStashNow.addEventListener('click', async () => {
+  btnStashNow.disabled = true;
+  try {
+    const res = await chrome.runtime.sendMessage({ action: 'STASH_INACTIVE_TABS' });
+    await loadState();
+    await loadVaultSessions();
+    showToast(`Parked ${res?.session?.tabCount || 0} tabs in the Vault!`);
+  } finally {
+    btnStashNow.disabled = false;
+  }
 });
 
 // Organize Now button
@@ -446,7 +668,7 @@ btnOrganize.addEventListener('click', async () => {
     await loadState();
     showToast('Sorted tabs by Usage Score');
   } finally {
-    labelOrganize.textContent = 'Organize Now';
+    labelOrganize.textContent = 'Organize';
     btnOrganize.disabled = false;
   }
 });
@@ -463,29 +685,13 @@ btnDedupe.addEventListener('click', async () => {
   }
 });
 
-// Close Archived Tabs button
-btnPruneArchive.addEventListener('click', async () => {
-  const count = Number(badgeArchive.textContent) || 0;
-  if (count === 0) return;
-  if (confirm(`Close all ${count} inactive tab(s) in the Archive group?`)) {
-    btnPruneArchive.disabled = true;
-    try {
-      const res = await chrome.runtime.sendMessage({ action: 'PRUNE_ARCHIVE' });
-      await loadState();
-      showToast(`Pruned ${res?.closedCount || 0} archived tab(s)`);
-    } finally {
-      btnPruneArchive.disabled = false;
-    }
-  }
-});
-
 // Focus Mode toggle
 toggleFocusMode.addEventListener('change', async (e) => {
   if (!currentSettings) return;
   currentSettings.focusMode = e.target.checked;
   await saveSettings();
   await loadState();
-  showToast(e.target.checked ? 'Focus Mode active' : 'Focus Mode disabled');
+  showToast(e.target.checked ? 'Zen Focus Mode active' : 'Focus Mode disabled');
 });
 
 // Smart History & RAM Saver toggle

@@ -1,4 +1,4 @@
-/* Tidy Tabs 2.1 — Modern Clean Theme with Tab Spotlight */
+/* Tidy Tabs 2.2 — Modern Clean Theme with Audio Protection & Tab Vault */
 
 :root {
   --bg-app: #0b0f17;
@@ -64,7 +64,7 @@
 }
 
 body {
-  width: 390px;
+  width: 395px;
   background-color: var(--bg-app);
   color: var(--text-primary);
   font-size: 13px;
@@ -161,7 +161,140 @@ body {
   letter-spacing: 0.04em;
 }
 
-/* 2. Visual Tab Distribution Card */
+/* 2. Now-Playing Media Bar */
+.now-playing-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: linear-gradient(135deg, rgba(244, 63, 94, 0.12), rgba(168, 85, 247, 0.12));
+  border: 1px solid rgba(244, 63, 94, 0.35);
+  border-radius: 8px;
+  padding: 7px 10px;
+  gap: 8px;
+}
+
+.audio-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  flex: 1;
+}
+
+.sound-wave-icon {
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 14px;
+  flex-shrink: 0;
+}
+
+.sound-wave-icon .bar {
+  width: 3px;
+  background-color: #f43f5e;
+  border-radius: 1px;
+  animation: soundBounce 1.2s infinite ease-in-out;
+}
+
+.sound-wave-icon .bar-1 { height: 6px; animation-delay: 0s; }
+.sound-wave-icon .bar-2 { height: 13px; animation-delay: 0.2s; }
+.sound-wave-icon .bar-3 { height: 9px; animation-delay: 0.4s; }
+
+@keyframes soundBounce {
+  0%, 100% { height: 4px; }
+  50% { height: 14px; }
+}
+
+.audio-meta {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.audio-label {
+  font-size: 9px;
+  font-weight: 700;
+  color: #f43f5e;
+  letter-spacing: 0.06em;
+}
+
+.audio-title {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.audio-controls {
+  display: flex;
+  gap: 5px;
+  flex-shrink: 0;
+}
+
+.btn-audio-action {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 3px 7px;
+  border-radius: 5px;
+  border: 1px solid rgba(244, 63, 94, 0.3);
+  background: var(--bg-card);
+  color: var(--text-primary);
+  cursor: pointer;
+  transition: all 0.12s ease;
+}
+
+.btn-audio-action:hover {
+  background: #f43f5e;
+  color: #ffffff;
+  border-color: #f43f5e;
+}
+
+/* 3. ADHD Overload Banner */
+.overload-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: rgba(245, 158, 11, 0.12);
+  border: 1px solid rgba(245, 158, 11, 0.3);
+  border-radius: 8px;
+  padding: 7px 10px;
+  gap: 8px;
+}
+
+.overload-text {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  font-weight: 500;
+  color: #f59e0b;
+}
+
+.overload-alert-icon {
+  font-size: 12px;
+}
+
+.btn-overload-action {
+  font-size: 10px;
+  font-weight: 700;
+  padding: 3px 8px;
+  border-radius: 5px;
+  border: 1px solid rgba(245, 158, 11, 0.4);
+  background: rgba(245, 158, 11, 0.2);
+  color: #f59e0b;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.12s ease;
+}
+
+.btn-overload-action:hover {
+  background: #f59e0b;
+  color: #000000;
+}
+
+/* 4. Visual Tab Distribution Card */
 .ratio-card {
   background: var(--bg-card);
   border: 1px solid var(--border-hairline);
@@ -252,7 +385,7 @@ body {
 .dot-cyan { background-color: var(--group-cyan); }
 .dot-orange { background-color: var(--group-orange); }
 
-/* 3. Action Dock */
+/* 5. Action Dock */
 .action-dock {
   display: grid;
   grid-template-columns: 1.4fr 1fr 1fr;
@@ -318,7 +451,101 @@ body {
   line-height: 1.2;
 }
 
-/* 4. Tab Spotlight (Navigator) */
+/* 6. Tab Vault Drawer */
+.btn-mini-stash {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 2px 7px;
+  border-radius: 5px;
+  background: rgba(6, 182, 212, 0.15);
+  border: 1px solid rgba(6, 182, 212, 0.35);
+  color: #06b6d4;
+  cursor: pointer;
+  transition: all 0.12s ease;
+}
+
+.btn-mini-stash:hover {
+  background: #06b6d4;
+  color: #ffffff;
+}
+
+.vault-sessions-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  max-height: 140px;
+  overflow-y: auto;
+}
+
+.vault-session-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 9px;
+  border-radius: 6px;
+  background: var(--bg-subtle);
+  border: 1px solid var(--border-hairline);
+  gap: 6px;
+}
+
+.vault-session-info {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.vault-session-name {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.vault-session-meta {
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
+.vault-session-actions {
+  display: flex;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.btn-vault-restore {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 2px 7px;
+  border-radius: 4px;
+  background: var(--accent-primary);
+  color: #ffffff;
+  border: none;
+  cursor: pointer;
+}
+
+.btn-vault-restore:hover {
+  background: var(--accent-primary-hover);
+}
+
+.btn-vault-del {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: var(--bg-card);
+  color: var(--text-muted);
+  border: 1px solid var(--border-hairline);
+  cursor: pointer;
+}
+
+.btn-vault-del:hover {
+  color: #ef4444;
+  border-color: #ef4444;
+}
+
+/* 7. Tab Spotlight (Keyboard-Navigable) */
 .card-header-left {
   display: flex;
   align-items: center;
@@ -338,7 +565,7 @@ body {
   border: 1px solid var(--border-hairline);
   border-radius: 6px;
   padding: 3px 7px;
-  width: 145px;
+  width: 140px;
 }
 
 .search-icon {
@@ -362,7 +589,7 @@ body {
 .spotlight-scroll-wrap {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 3px;
   max-height: 155px;
   overflow-y: auto;
   padding-right: 2px;
@@ -380,9 +607,13 @@ body {
   gap: 6px;
 }
 
-.spotlight-item:hover {
+.spotlight-item:hover, .spotlight-item.keyboard-selected {
   background: var(--bg-active);
   transform: translateX(1px);
+}
+
+.spotlight-item.keyboard-selected {
+  outline: 1px solid var(--border-focus);
 }
 
 .spotlight-left {
@@ -454,6 +685,12 @@ body {
   line-height: 1.3;
 }
 
+.badge-recency-audible {
+  background: rgba(244, 63, 94, 0.2);
+  color: #f43f5e;
+  border: 1px solid rgba(244, 63, 94, 0.4);
+}
+
 .badge-recency-active {
   background: rgba(16, 185, 129, 0.2);
   color: #10b981;
@@ -480,7 +717,22 @@ body {
   color: var(--text-muted);
 }
 
-/* 5. Surface Cards & Groups List */
+.spotlight-close-btn {
+  font-size: 12px;
+  font-weight: bold;
+  color: var(--text-muted);
+  padding: 0 4px;
+  border-radius: 3px;
+  cursor: pointer;
+  line-height: 1;
+}
+
+.spotlight-close-btn:hover {
+  color: #ef4444;
+  background: rgba(239, 68, 68, 0.15);
+}
+
+/* 8. Surface Cards & Groups List */
 .surface-card {
   background: var(--bg-card);
   border: 1px solid var(--border-hairline);
@@ -576,7 +828,7 @@ body {
   background: rgba(255, 255, 255, 0.04);
 }
 
-/* 6. Uncategorized Domains Classifier */
+/* 9. Uncategorized Domains Classifier */
 .uncat-container {
   display: flex;
   flex-direction: column;
@@ -625,7 +877,7 @@ body {
   border-color: var(--accent-primary);
 }
 
-/* 7. Switches */
+/* 10. Switches */
 .switch-row {
   display: flex;
   align-items: center;
@@ -659,6 +911,15 @@ body {
   border-radius: 4px;
   background: rgba(16, 185, 129, 0.15);
   color: #10b981;
+}
+
+.badge-mini-shortcut {
+  font-size: 9px;
+  font-weight: 700;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text-muted);
 }
 
 .switch-desc {
@@ -714,7 +975,7 @@ body {
   transform: translateX(16px);
 }
 
-/* 8. Slider */
+/* 11. Slider */
 .slider-block {
   display: flex;
   flex-direction: column;
@@ -766,7 +1027,7 @@ body {
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
 }
 
-/* 9. Segmented Control & Domain Chips */
+/* 12. Segmented Control & Domain Chips */
 .segmented-control {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
@@ -871,7 +1132,7 @@ body {
   background: var(--bg-card-hover);
 }
 
-/* 10. Footer */
+/* 13. Footer & Keyboard Shortcuts */
 .app-footer {
   display: flex;
   justify-content: space-between;
@@ -893,12 +1154,22 @@ body {
   color: var(--text-primary);
 }
 
-.footer-meta {
-  font-size: 10px;
-  color: var(--text-muted);
+.footer-shortcuts {
+  display: flex;
+  gap: 5px;
 }
 
-/* 11. Toast */
+.kbd-hint {
+  font-size: 9px;
+  font-weight: 600;
+  color: var(--text-muted);
+  padding: 2px 5px;
+  border-radius: 4px;
+  background: var(--bg-subtle);
+  border: 1px solid var(--border-hairline);
+}
+
+/* 14. Toast */
 .toast-popup {
   position: fixed;
   bottom: 12px;

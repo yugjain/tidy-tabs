@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Tidy Tabs - Smart Tab Organizer",
-  "version": "2.1.0",
-  "description": "Automatically organizes unpinned tabs into native Tab Groups using Chrome History intelligence, dynamic auto-clustering, and TTL recency.",
+  "version": "2.2.0",
+  "description": "Automatically organizes unpinned tabs into native Tab Groups with audio protection, Tab Vault stashing, and keyboard shortcuts.",
   "permissions": [
     "tabs",
     "tabGroups",
@@ -10,6 +10,29 @@
     "alarms",
     "history"
   ],
+  "commands": {
+    "organize_tabs": {
+      "suggested_key": {
+        "default": "Alt+Shift+O",
+        "mac": "Command+Shift+O"
+      },
+      "description": "Tidy & Sort all tabs in current window"
+    },
+    "toggle_focus": {
+      "suggested_key": {
+        "default": "Alt+Shift+F",
+        "mac": "Command+Shift+F"
+      },
+      "description": "Toggle Zen Focus Mode"
+    },
+    "stash_inactive": {
+      "suggested_key": {
+        "default": "Alt+Shift+S",
+        "mac": "Command+Shift+S"
+      },
+      "description": "Stash idle tabs into the Vault"
+    }
+  },
   "background": {
     "service_worker": "background.js",
     "type": "module"
