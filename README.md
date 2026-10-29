@@ -60,9 +60,16 @@ Control your entire browser tabstrip with zero mouse clicks:
 
 ## ⚡ Superpowers Built for ADHD
 
-### 🧠 Multitasking Working-Set Grace Period (New in v2.2.1)
+### 🎛️ Your Manual Changes Always Win (New in v2.2.2)
+Tidy Tabs never undoes a deliberate change you make in the tab strip:
+- **Renamed groups keep their exact name.** Groups are identified by the tabs they contain, so custom titles stay exactly as written — no `●`, no `🔊`, and no `(N)` appended.
+- **Dragged tabs stay where you put them.** Move a tab into another group and it stays there through new tabs, tab switches, the 5-minute sweep, ⌘⇧O, extension reloads, and Chrome restarts.
+- **Folded groups stay folded.** Collapse a group and it stays collapsed immediately — no waiting out the 4-minute working-set timer. It expands only while one of its tabs is active or playing audio, then folds back as soon as you move on.
+- **Groups you create yourself are untouched.** Tidy Tabs leaves custom tab groups completely alone, including new tabs you open inside them.
+
+### 🧠 Multitasking Working-Set Grace Period (v2.2.1)
 Ever tried looking up a reference on Google, switching to a sports match or video for 30 seconds, only to find your research group instantly snapped shut under you? That jarring context switch causes **doorway amnesia** and destroys ADHD working memory:
-- **Working-Set Memory**: Any tab group touched within the last **4 minutes** is tagged as **Warm** and **guaranteed to stay expanded** alongside your active tab and media tabs!
+- **Working-Set Memory**: Any tab group touched within the last **4 minutes** is tagged as **Warm** and kept expanded alongside your active tab and media tabs — unless you folded it by hand.
 - **Zero Disruption While Multitasking**: Flip back and forth between research, docs, and leisure without tabs collapsing or moving around.
 - **Graceful Collapse**: Once a group has truly been idle for $>4$ minutes, Zen Focus Mode gently closes it into the background.
 - **Customizable Buffer**: Adjust your multitasking grace period (1 to 15 mins, default 4 mins) directly from the popup settings slider.
@@ -93,7 +100,7 @@ When your unpinned tabs exceed 25, a gentle banner appears in the popup: *"32 ta
 Whenever you open **2 or more tabs** on a new site (e.g. `airbnb.com`, `stripe.com`, `coursera.org`), Tidy Tabs automatically spawns a dedicated native Tab Group named after that site (e.g., `Airbnb (2)`) with a unique vibrant color. It keeps your tabs neatly clustered for your current task and automatically dissolves only when all tabs in that cluster are closed.
 
 ### ⏱️ Strict 5-Minute Auto-Sweep
-A background timer automatically evaluates tabs, updates group counts, and performs a full Chrome History Usage-Score sort **every 5 minutes** so your browser stays perpetually tidy.
+A background timer automatically evaluates tabs, updates group counts, and performs a full Chrome History Usage-Score sort **every 5 minutes** so your browser stays perpetually tidy — while preserving your renamed groups, manual tab placements, and folded groups.
 
 ### 🧹 1-Click Duplicate Cleaner
 Accidentally opened the same YouTube video, GitHub issue, or article three times? Click **Dupes** in the popup to close all duplicates in 1 click, automatically keeping the active or newest tab.
@@ -117,6 +124,12 @@ Tidy Tabs maintains a fixed, stable left-to-right order of native Chrome Tab Gro
 | **Archive** | ⚪ Slate | **Auto-Collapsed** | Inactive tabs untouched for > 14 days (or opened-once clutter). **Hibernated from RAM.** |
 
 > 📌 **Note**: Any group containing actively playing audio (`🔊`) or your current active tab (`●`) is **strictly forbidden from collapsing**, guaranteeing you never lose visual control.
+
+> ✏️ **Renamed a group?** Tidy Tabs identifies groups by the tabs they contain, so your custom title is kept exactly as written. It never adds its own prefix or tab count to a group you renamed.
+
+> 🖐️ **Moved a tab by hand?** A tab you drag into another group stays there — Tidy Tabs remembers your placement and won't pull it back. Tabs in groups you created yourself are left untouched entirely.
+
+> 📕 **Folded a group by hand?** Your fold is honored immediately — no waiting for the recency timer. The group only expands while one of its tabs is active or playing audio, then folds back as soon as you move on.
 
 ---
 

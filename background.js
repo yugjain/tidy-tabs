@@ -1,5 +1,5 @@
 /**
- * Tidy Tabs v2.2.1 - Background Service Worker (Manifest V3)
+ * Tidy Tabs v2.2.2 - Background Service Worker (Manifest V3)
  * Features for ADHD Power Users:
  * - Multitasking Working-Set Grace Period (3-4 mins): Recently touched groups stay expanded while switching tabs
  * - Absolute Audio Protection: Active audio tabs/groups are NEVER collapsed (even in Focus Mode)
@@ -251,6 +251,17 @@ let cachedVaultSessions = []; // Array of stashed sessions
 let cachedSettings = { ...DEFAULT_SETTINGS };
 let isInitialized = false;
 
+// Last group Tidy Tabs placed each tab in, plus any manual placement override.
+// Session-scoped so a browser restart naturally falls back to the restored
+// group membership (see computeManualPlacements).
+let cachedTabPlacements = {}; // { [tabId]: { groupId: number, manualCategoryId: string | null } }
+const EXEMPT_PLACEMENT = '__exempt__';
+
+// Last collapsed state Tidy Tabs wrote per native group, plus whether the
+// user folded that group by hand. A manual fold sticks across the recency
+// grace period and is only cleared when the user expands it again.
+let cachedGroupUiState = {}; // { [groupId]: { collapsed: boolean, manualFold: boolean } }
+
 const historyVisitCache = new Map();
 const HISTORY_CACHE_TTL_MS = 10 * 60 * 1000;
 
@@ -325,6 +336,25 @@ export function extractBaseGroupName(rawTitle) {
   return rawTitle.replace(/^(?:●|🔊)\s*/u, '').replace(/\s*\(\d+\)$/, '').trim();
 }
 
+/**
+ * True when a native title still matches the extension's generated format:
+ * "Work (3)", "● Work (3)" or "🔊 Work (3)".
+ * Any other title is treated as a user-chosen name and is never rewritten.
+ */
+export function isAutoGroupTitle(rawTitle, categoryName) {
+  if (!rawTitle || !categoryName) return false;
+  const escaped = categoryName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`^(?:● |🔊 )?${escaped} \\(\\d+\\)$`, 'u').test(rawTitle);
+}
+
+function findCategoryById(id) {
+  if (!id) return null;
+  if (id === ARCHIVE_CATEGORY.id) return ARCHIVE_CATEGORY;
+  const core = cachedSettings.categories.find((c) => c.id === id);
+  if (core) return core;
+  return Object.values(cachedDynamicClusters).find((c) => c.id === id) || null;
+}
+
 function runLocked(windowId, task) {
   const currentLock = windowLocks.get(windowId) || Promise.resolve();
   const nextLock = currentLock
@@ -384,6 +414,18 @@ async function persistStorage() {
   }
 }
 
+async function persistSessionState() {
+  try {
+    await chrome.storage.session.set({
+      tabPlacements: cachedTabPlacements,
+      groupUiState: cachedGroupUiState
+    });
+  } catch (err) {
+    // storage.session can be unavailable in older Chrome builds.
+    console.warn('[TidyTabs] Session state write error:', err);
+  }
+}
+
 async function initializeState() {
   const data = await chrome.storage.local.get([
     'tabTimestamps',
@@ -398,6 +440,15 @@ async function initializeState() {
   cachedVaultSessions = Array.isArray(data.stashedSessions) ? data.stashedSessions : [];
   cachedSettings = { ...DEFAULT_SETTINGS, ...(data.settings || {}) };
 
+  try {
+    const sessionData = await chrome.storage.session.get(['tabPlacements', 'groupUiState']);
+    cachedTabPlacements = sessionData.tabPlacements || {};
+    cachedGroupUiState = sessionData.groupUiState || {};
+  } catch {
+    cachedTabPlacements = {};
+    cachedGroupUiState = {};
+  }
+
   if (!cachedSettings.categories || cachedSettings.categories.length === 0) {
     cachedSettings.categories = structuredClone(DEFAULT_CATEGORIES);
   }
@@ -406,6 +457,7 @@ async function initializeState() {
     const allTabs = await chrome.tabs.query({});
     const activeTabIds = new Set(allTabs.map((t) => t.id));
     let hasChanges = false;
+    let sessionStateChanged = false;
 
     for (const tab of allTabs) {
       const rawUrl = tab.url || tab.pendingUrl || '';
@@ -436,8 +488,28 @@ async function initializeState() {
       }
     }
 
+    for (const idStr of Object.keys(cachedTabPlacements)) {
+      if (!activeTabIds.has(Number(idStr))) {
+        delete cachedTabPlacements[idStr];
+        sessionStateChanged = true;
+      }
+    }
+
+    const activeGroupIds = new Set(
+      allTabs.filter((t) => t.groupId !== -1).map((t) => t.groupId)
+    );
+    for (const idStr of Object.keys(cachedGroupUiState)) {
+      if (!activeGroupIds.has(Number(idStr))) {
+        delete cachedGroupUiState[idStr];
+        sessionStateChanged = true;
+      }
+    }
+
     if (hasChanges) {
       await persistStorage();
+    }
+    if (sessionStateChanged) {
+      await persistSessionState();
     }
   } catch (err) {
     console.warn('[TidyTabs] Error syncing tabs during init:', err);
@@ -616,6 +688,198 @@ export function classifyTab(tab, now = Date.now(), visitCount = 1) {
 }
 
 /**
+ * Assign existing native groups to categories.
+ * Pass 1 uses the extension-generated title; Pass 2 identifies user-renamed
+ * groups by which category owns the majority of their tabs.
+ */
+function resolveGroupAssignments(existingGroups, buckets, unpinnedTabs, targetCategoryOrder) {
+  const tabCategoryById = new Map();
+  for (const bucket of buckets.values()) {
+    for (const tab of bucket.tabs) {
+      tabCategoryById.set(tab.id, bucket.config.id);
+    }
+  }
+
+  const groupStatsById = new Map();
+  for (const g of existingGroups) {
+    groupStatsById.set(g.id, { total: 0, byCategory: new Map() });
+  }
+  for (const tab of unpinnedTabs) {
+    const stats = groupStatsById.get(tab.groupId);
+    if (!stats) continue;
+
+    const record = cachedTabPlacements[tab.id];
+
+    // Ignore tabs the user just dragged into this group when judging which
+    // category owns it; otherwise one moved-in tab can tip a renamed group
+    // into a tie and make it look unmanaged.
+    if (record && record.groupId !== tab.groupId) continue;
+
+    // Tabs parked in a group Tidy Tabs does not manage do not vote either.
+    if (record?.manualCategoryId === EXEMPT_PLACEMENT) continue;
+
+    stats.total += 1;
+    const catId = record?.manualCategoryId || tabCategoryById.get(tab.id);
+    if (catId) {
+      stats.byCategory.set(catId, (stats.byCategory.get(catId) || 0) + 1);
+    }
+  }
+
+  const claimedGroupIds = new Set();
+  const groupForCategory = new Map();
+
+  // A group is only considered for renamed-group matching if Tidy Tabs has
+  // previously placed at least one of its current tabs there. Otherwise a
+  // brand-new user-created group could be mistaken for a renamed one and
+  // absorb unrelated tabs. After a browser restart there are no records, so
+  // restored groups are eligible (adoption).
+  const hasAnyPlacements = unpinnedTabs.some((t) => cachedTabPlacements[t.id]);
+  const trackedTabCountByGroup = new Map();
+  for (const g of existingGroups) trackedTabCountByGroup.set(g.id, 0);
+  for (const tab of unpinnedTabs) {
+    const record = cachedTabPlacements[tab.id];
+    if (!record || record.groupId !== tab.groupId) continue;
+    if (record.manualCategoryId === EXEMPT_PLACEMENT) continue;
+    if (trackedTabCountByGroup.has(tab.groupId)) {
+      trackedTabCountByGroup.set(tab.groupId, trackedTabCountByGroup.get(tab.groupId) + 1);
+    }
+  }
+  const isTrackedGroup = (group) =>
+    !hasAnyPlacements || (trackedTabCountByGroup.get(group.id) || 0) > 0;
+
+  // Pass 1: groups that still carry the extension-generated title.
+  for (const cat of targetCategoryOrder) {
+    const bucket = buckets.get(cat.id);
+    if (!bucket || bucket.tabs.length === 0 || groupForCategory.has(cat.id)) continue;
+
+    let bestGroup = null;
+    let bestOverlap = -1;
+    for (const g of existingGroups) {
+      if (claimedGroupIds.has(g.id)) continue;
+      if (extractBaseGroupName(g.title) !== cat.name) continue;
+      const overlap = groupStatsById.get(g.id)?.byCategory.get(cat.id) || 0;
+      if (overlap > bestOverlap) {
+        bestGroup = g;
+        bestOverlap = overlap;
+      }
+    }
+
+    if (bestGroup) {
+      claimedGroupIds.add(bestGroup.id);
+      groupForCategory.set(cat.id, {
+        group: bestGroup,
+        isCustom: !isAutoGroupTitle(bestGroup.title, cat.name)
+      });
+    }
+  }
+
+  // Pass 2: user-renamed groups, matched by the category that owns most of
+  // their tabs. Their title is preserved verbatim.
+  for (const cat of targetCategoryOrder) {
+    const bucket = buckets.get(cat.id);
+    if (!bucket || bucket.tabs.length === 0 || groupForCategory.has(cat.id)) continue;
+
+    let bestGroup = null;
+    let bestOverlap = 0;
+    for (const g of existingGroups) {
+      if (claimedGroupIds.has(g.id)) continue;
+      if (!isTrackedGroup(g)) continue;
+      const stats = groupStatsById.get(g.id);
+      if (!stats || stats.total === 0) continue;
+      const overlap = stats.byCategory.get(cat.id) || 0;
+      if (overlap > bestOverlap && overlap * 2 > stats.total) {
+        bestGroup = g;
+        bestOverlap = overlap;
+      }
+    }
+
+    if (bestGroup) {
+      claimedGroupIds.add(bestGroup.id);
+      groupForCategory.set(cat.id, {
+        group: bestGroup,
+        isCustom: Boolean(bestGroup.title && bestGroup.title.trim()) &&
+          !isAutoGroupTitle(bestGroup.title, cat.name)
+      });
+    }
+  }
+
+  const groupCategoryById = new Map();
+  for (const [catId, resolution] of groupForCategory.entries()) {
+    groupCategoryById.set(resolution.group.id, catId);
+  }
+
+  return { groupForCategory, groupCategoryById };
+}
+
+/**
+ * Work out which tabs the user placed by hand.
+ * A tab whose current group differs from the group Tidy Tabs last left it in
+ * was moved manually, so its destination wins over URL classification.
+ * Tabs in groups Tidy Tabs does not manage are left completely alone.
+ */
+function computeManualPlacements(
+  tabs,
+  groupCategoryById,
+  classifiedCategoryByTabId,
+  validCategoryIds,
+  allowAdoption
+) {
+  const manualCategoryByTabId = new Map();
+  const exemptTabIds = new Set();
+
+  for (const tab of tabs) {
+    const record = cachedTabPlacements[tab.id];
+    const isUngrouped = tab.groupId === -1;
+    const managedCategory = isUngrouped ? undefined : groupCategoryById.get(tab.groupId);
+    const classifiedCategory = classifiedCategoryByTabId.get(tab.id);
+
+    if (!record) {
+      // First time we see this tab (fresh session or brand-new tab).
+      if (isUngrouped) continue;
+
+      if (!managedCategory) {
+        // Opened into a group Tidy Tabs does not manage: leave it there.
+        exemptTabIds.add(tab.id);
+        continue;
+      }
+
+      if (allowAdoption && managedCategory !== classifiedCategory) {
+        manualCategoryByTabId.set(tab.id, managedCategory);
+      }
+      continue;
+    }
+
+    if (tab.groupId === record.groupId) {
+      // No manual move since the last organize: keep the previous override.
+      const manual = record.manualCategoryId;
+      if (manual === EXEMPT_PLACEMENT) {
+        exemptTabIds.add(tab.id);
+      } else if (manual && validCategoryIds.has(manual)) {
+        manualCategoryByTabId.set(tab.id, manual);
+      }
+      continue;
+    }
+
+    // The tab is in a different group than we last left it in: user moved it.
+    if (isUngrouped) {
+      // Ungrouped by the user: let normal classification place it again.
+      continue;
+    }
+    if (managedCategory) {
+      if (managedCategory !== classifiedCategory) {
+        manualCategoryByTabId.set(tab.id, managedCategory);
+      }
+      // Otherwise it was moved back to its natural category; drop the override.
+    } else {
+      // Moved into a group Tidy Tabs does not manage: keep it there.
+      exemptTabIds.add(tab.id);
+    }
+  }
+
+  return { manualCategoryByTabId, exemptTabIds };
+}
+
+/**
  * Diff-based, zero-flicker window organization:
  * - AUDIO PROTECTION: Any group containing tab.audible is NEVER collapsed!
  * - Groups with audio display speaker symbol '🔊 Title (N)'.
@@ -718,6 +982,7 @@ async function organizeWindow(windowId, options = { forceSort: false }) {
     });
   }
 
+  const classifiedCategoryByTabId = new Map();
   for (const item of preliminaryAssignments) {
     const { tab, classification } = item;
     let targetCat = classification.category;
@@ -729,7 +994,55 @@ async function organizeWindow(windowId, options = { forceSort: false }) {
     if (!buckets.has(targetCat.id)) {
       buckets.set(targetCat.id, { config: targetCat, tabs: [] });
     }
+    classifiedCategoryByTabId.set(tab.id, targetCat.id);
     buckets.get(targetCat.id).tabs.push(tab);
+  }
+
+  // Resolve existing native groups by the tabs they contain, not just by title.
+  // User-renamed groups no longer match the generated "<Category> (N)" title,
+  // so title-only lookups used to recreate them under the default category
+  // name (and Chrome then deleted the emptied renamed group).
+  let { groupForCategory, groupCategoryById } = resolveGroupAssignments(
+    existingGroups,
+    buckets,
+    unpinnedTabs,
+    targetCategoryOrder
+  );
+
+  // Manual tab moves win over URL classification. Tabs sitting in a group
+  // Tidy Tabs does not manage are left untouched.
+  const allowAdoption = !unpinnedTabs.some((t) => cachedTabPlacements[t.id]);
+  const { manualCategoryByTabId, exemptTabIds } = computeManualPlacements(
+    unpinnedTabs,
+    groupCategoryById,
+    classifiedCategoryByTabId,
+    new Set(buckets.keys()),
+    allowAdoption
+  );
+
+  if (manualCategoryByTabId.size > 0 || exemptTabIds.size > 0) {
+    for (const bucket of buckets.values()) {
+      bucket.tabs.length = 0;
+    }
+    for (const item of preliminaryAssignments) {
+      const { tab } = item;
+      if (exemptTabIds.has(tab.id)) continue;
+      const manualCategory = manualCategoryByTabId.get(tab.id);
+      const targetCatId =
+        manualCategory && buckets.has(manualCategory)
+          ? manualCategory
+          : classifiedCategoryByTabId.get(tab.id);
+      const bucket = buckets.get(targetCatId);
+      if (bucket) bucket.tabs.push(tab);
+    }
+
+    // Re-resolve because the manual moves changed each group's tab makeup.
+    ({ groupForCategory } = resolveGroupAssignments(
+      existingGroups,
+      buckets,
+      unpinnedTabs,
+      targetCategoryOrder
+    ));
   }
 
   for (const bucket of buckets.values()) {
@@ -744,22 +1057,22 @@ async function organizeWindow(windowId, options = { forceSort: false }) {
     }
   }
 
-  const groupsByBaseTitle = new Map();
-  for (const g of existingGroups) {
-    const base = extractBaseGroupName(g.title);
-    if (!groupsByBaseTitle.has(base)) {
-      groupsByBaseTitle.set(base, g);
-    }
+  const finalGroupByTabId = new Map();
+  for (const tab of unpinnedTabs) {
+    finalGroupByTabId.set(tab.id, tab.groupId);
   }
 
   let nextInsertIndex = pinnedTabs.length;
+  let groupUiStateChanged = false;
 
   for (const cat of targetCategoryOrder) {
     const bucket = buckets.get(cat.id);
     if (!bucket || bucket.tabs.length === 0) continue;
 
     const allBucketTabIds = bucket.tabs.map((t) => t.id);
-    const existingGroup = groupsByBaseTitle.get(cat.name);
+    const resolution = groupForCategory.get(cat.id);
+    const existingGroup = resolution?.group;
+    const isCustomTitle = Boolean(resolution?.isCustom);
     let groupId = existingGroup ? existingGroup.id : undefined;
 
     try {
@@ -781,6 +1094,10 @@ async function organizeWindow(windowId, options = { forceSort: false }) {
         }
       }
 
+      for (const tab of bucket.tabs) {
+        finalGroupByTabId.set(tab.id, groupId);
+      }
+
       // ABSOLUTE AUDIO, ACTIVE & MULTITASKING GRACE PROTECTION:
       // Never collapse if viewing the tab, playing audio, or interacted with recently!
       const hasActiveTab = bucket.tabs.some((t) => t.active);
@@ -793,10 +1110,38 @@ async function organizeWindow(windowId, options = { forceSort: false }) {
         return (now - ts) < graceMs;
       });
 
+      // Respect a fold the user made by hand. The collapsed value we last
+      // wrote tells us whether the group changed outside the extension. A
+      // manual fold stays sticky through the working-set grace period, and
+      // refolds as soon as the group is no longer active or audible. Expanding
+      // the group again clears the intent, unless Chrome expanded it because
+      // one of its tabs is in use.
+      let manualFold = false;
+      if (existingGroup) {
+        const previousUi = cachedGroupUiState[existingGroup.id];
+        const currentCollapsed = Boolean(existingGroup.collapsed);
+
+        if (!previousUi) {
+          // First sighting (fresh session or upgrade): honour a folded group.
+          manualFold = currentCollapsed;
+        } else {
+          manualFold = Boolean(previousUi.manualFold);
+          if (previousUi.collapsed !== currentCollapsed) {
+            if (currentCollapsed) {
+              manualFold = true;
+            } else if (!hasActiveTab && !hasAudibleTab) {
+              manualFold = false;
+            }
+          }
+        }
+      }
+
       let desiredCollapsed = false;
 
       if (hasActiveTab || hasAudibleTab) {
         desiredCollapsed = false; // Strictly expanded!
+      } else if (manualFold) {
+        desiredCollapsed = true; // User folded it: stay folded, no grace wait.
       } else if (cat.id === 'archive') {
         desiredCollapsed = true;
       } else if (isWarmGroup) {
@@ -809,23 +1154,40 @@ async function organizeWindow(windowId, options = { forceSort: false }) {
         desiredCollapsed = Boolean(cat.collapsed);
       }
 
-      // Title formatting: Speaker symbol has highest visual urgency
+      // Auto-named groups keep the speaker/active indicator and tab count.
+      // User-renamed groups keep their exact title (no prefix, no count);
+      // only color and collapsed state are refreshed.
       const titlePrefix = hasAudibleTab ? '🔊 ' : (hasActiveTab ? '● ' : '');
-      const dynamicTitle = `${titlePrefix}${cat.name} (${bucket.tabs.length})`;
+      const dynamicTitle = isCustomTitle
+        ? existingGroup.title
+        : `${titlePrefix}${cat.name} (${bucket.tabs.length})`;
       const desiredColor = cat.color || 'blue';
 
       const needsMetadataUpdate =
         !existingGroup ||
-        existingGroup.title !== dynamicTitle ||
+        (!isCustomTitle && existingGroup.title !== dynamicTitle) ||
         existingGroup.color !== desiredColor ||
         existingGroup.collapsed !== desiredCollapsed;
 
       if (needsMetadataUpdate) {
-        await chrome.tabGroups.update(groupId, {
-          title: dynamicTitle,
+        const groupUpdate = {
           color: desiredColor,
           collapsed: desiredCollapsed
-        });
+        };
+        if (!isCustomTitle) {
+          groupUpdate.title = dynamicTitle;
+        }
+        await chrome.tabGroups.update(groupId, groupUpdate);
+      }
+
+      const previousUiState = cachedGroupUiState[groupId];
+      if (
+        !previousUiState ||
+        previousUiState.collapsed !== desiredCollapsed ||
+        previousUiState.manualFold !== manualFold
+      ) {
+        cachedGroupUiState[groupId] = { collapsed: desiredCollapsed, manualFold };
+        groupUiStateChanged = true;
       }
 
       const currentTabsInWindow = await chrome.tabs.query({ windowId, groupId });
@@ -855,6 +1217,25 @@ async function organizeWindow(windowId, options = { forceSort: false }) {
     } catch (err) {
       console.warn(`[TidyTabs] Grouping error for category ${cat.name}:`, err);
     }
+  }
+
+  // Remember where every tab ended up so the next organize can tell whether
+  // the user moved it by hand (a different group than we left it in).
+  const nextPlacements = { ...cachedTabPlacements };
+  for (const tab of unpinnedTabs) {
+    nextPlacements[tab.id] = {
+      groupId: finalGroupByTabId.get(tab.id) ?? tab.groupId,
+      manualCategoryId: exemptTabIds.has(tab.id)
+        ? EXEMPT_PLACEMENT
+        : (manualCategoryByTabId.get(tab.id) || null)
+    };
+  }
+  if (
+    groupUiStateChanged ||
+    JSON.stringify(nextPlacements) !== JSON.stringify(cachedTabPlacements)
+  ) {
+    cachedTabPlacements = nextPlacements;
+    await persistSessionState();
   }
 
   // If Zen Focus Mode is active, schedule an auto-check for when the earliest warm group expires
@@ -1059,6 +1440,10 @@ chrome.tabs.onRemoved.addListener(async (tabId) => {
     delete cachedTimestamps[tabId];
     await persistStorage();
   }
+  if (cachedTabPlacements[tabId]) {
+    delete cachedTabPlacements[tabId];
+    await persistSessionState();
+  }
 });
 
 // Periodic 5-minute alarm & warm group expiration checks
@@ -1139,6 +1524,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         let finalCategory = classification.category;
         if (classification.isCandidateForCluster && cachedDynamicClusters[classification.hostname]) {
           finalCategory = cachedDynamicClusters[classification.hostname];
+        }
+
+        const placement = cachedTabPlacements[tab.id];
+        if (placement?.manualCategoryId && placement.manualCategoryId !== EXEMPT_PLACEMENT) {
+          const manualCategory = findCategoryById(placement.manualCategoryId);
+          if (manualCategory) finalCategory = manualCategory;
         }
 
         counts[finalCategory.id] = (counts[finalCategory.id] || 0) + 1;
